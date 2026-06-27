@@ -1,0 +1,34 @@
+{
+  "name": "github-account-info",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "check-types": "turbo check-types",
+    "dev:web": "turbo -F web dev",
+    "dev:server": "turbo -F server dev",
+    "db:push": "turbo -F @github-account-info/db db:push",
+    "db:studio": "turbo -F @github-account-info/db db:studio",
+    "db:generate": "turbo -F @github-account-info/db db:generate",
+    "db:migrate": "turbo -F @github-account-info/db db:migrate",
+    "check": "biome check --write ."
+  },
+  "dependencies": {
+    "@github-account-info/env": "workspace:*",
+    "dotenv": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
+    "@github-account-info/config": "workspace:*",
+    "@types/node": "catalog:",
+    "turbo": "^2.9.16",
+    "typescript": "catalog:"
+  },
+  "packageManager": "pnpm@10.24.0"
+}
