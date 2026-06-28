@@ -1,10 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { AtSign, BookOpen, ExternalLink, RefreshCw, Save, Users } from "lucide-react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import {
+	ArrowLeft,
+	AtSign,
+	BookOpen,
+	ExternalLink,
+	RefreshCw,
+	Save,
+	Users,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { trpc } from "@/utils/trpc";
 import { getSelectedToken } from "@/utils/token-store";
+import { trpc } from "@/utils/trpc";
 
 export const Route = createFileRoute("/profile")({
 	component: ProfilePage,
@@ -31,6 +39,7 @@ const EMPTY_FORM = {
 };
 
 function ProfilePage() {
+	const navigate = useNavigate();
 	const selectedToken = getSelectedToken();
 	const fetchMut = useMutation(trpc.github.getAccount.mutationOptions());
 	const createMut = useMutation(trpc.account.create.mutationOptions());
@@ -87,10 +96,12 @@ function ProfilePage() {
 					setReady(true);
 				})
 				.catch((err) => {
-					toast.error(err instanceof Error ? err.message : "拉取 GitHub 信息失败");
+					toast.error(
+						err instanceof Error ? err.message : "拉取 GitHub 信息失败",
+					);
 				});
 		}
-	// eslint-disable-next-line react-hooks/exhaustive-deps
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [selectedToken?.id, listQuery.isPending]);
 
 	// Refresh from GitHub (manual)
@@ -162,7 +173,10 @@ function ProfilePage() {
 			<div className="flex flex-col items-center justify-center py-20 text-center">
 				<p className="text-gray-500 text-sm">
 					尚未选择 Token，请先前往{" "}
-					<Link to="/" className="font-medium text-blue-600 underline underline-offset-2">
+					<Link
+						to="/"
+						className="font-medium text-blue-600 underline underline-offset-2"
+					>
 						Token 管理页
 					</Link>{" "}
 					添加并选择一个 Token。
@@ -184,14 +198,23 @@ function ProfilePage() {
 	return (
 		<div className="grid gap-6">
 			<div className="flex items-center justify-between">
-				<h2 className="font-semibold text-gray-900 text-xl">账号信息编辑</h2>
+				<button
+					type="button"
+					onClick={() => navigate({ to: "/" })}
+					className="flex items-center gap-1.5 text-gray-500 text-sm transition hover:text-gray-900"
+				>
+					<ArrowLeft className="h-4 w-4" />
+					返回
+				</button>
 				<button
 					type="button"
 					onClick={handleRefresh}
 					disabled={fetchMut.isPending}
 					className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-gray-500 text-sm transition hover:border-blue-300 hover:text-blue-600 disabled:opacity-50"
 				>
-					<RefreshCw className={`h-3.5 w-3.5 ${fetchMut.isPending ? "animate-spin" : ""}`} />
+					<RefreshCw
+						className={`h-3.5 w-3.5 ${fetchMut.isPending ? "animate-spin" : ""}`}
+					/>
 					从 GitHub 刷新
 				</button>
 			</div>
@@ -212,7 +235,9 @@ function ProfilePage() {
 					)}
 					<div>
 						<p className="font-semibold text-gray-900">{form.login || "—"}</p>
-						<p className="text-gray-400 text-sm">GitHub ID: {form.githubId || "—"}</p>
+						<p className="text-gray-400 text-sm">
+							GitHub ID: {form.githubId || "—"}
+						</p>
 						<p className="text-gray-400 text-xs">
 							数据来源：{dbRecord ? "数据库" : "GitHub"}
 						</p>
@@ -220,7 +245,12 @@ function ProfilePage() {
 				</div>
 
 				<div className="grid gap-4">
-					<Field label="姓名" value={form.name} onChange={set("name")} placeholder="Your Name" />
+					<Field
+						label="姓名"
+						value={form.name}
+						onChange={set("name")}
+						placeholder="Your Name"
+					/>
 
 					<div className="flex flex-col gap-1.5">
 						<label className="text-gray-600 text-sm">简介</label>
@@ -234,11 +264,27 @@ function ProfilePage() {
 					</div>
 
 					<div className="grid grid-cols-2 gap-4">
-						<Field label="公司" value={form.company} onChange={set("company")} placeholder="Company" />
-						<Field label="地址" value={form.location} onChange={set("location")} placeholder="Location" />
+						<Field
+							label="公司"
+							value={form.company}
+							onChange={set("company")}
+							placeholder="Company"
+						/>
+						<Field
+							label="地址"
+							value={form.location}
+							onChange={set("location")}
+							placeholder="Location"
+						/>
 					</div>
 
-					<Field label="邮箱" value={form.email} onChange={set("email")} type="email" placeholder="you@example.com" />
+					<Field
+						label="邮箱"
+						value={form.email}
+						onChange={set("email")}
+						type="email"
+						placeholder="you@example.com"
+					/>
 
 					<div className="grid grid-cols-2 gap-4">
 						<div className="flex flex-col gap-1.5">
@@ -272,7 +318,9 @@ function ProfilePage() {
 					<div className="mt-2 grid grid-cols-3 divide-x divide-gray-100 rounded-xl border border-gray-100 bg-gray-50 text-center text-sm">
 						<div className="flex flex-col items-center gap-1 py-3">
 							<BookOpen className="h-4 w-4 text-blue-400" />
-							<span className="font-bold text-blue-600">{form.publicRepos}</span>
+							<span className="font-bold text-blue-600">
+								{form.publicRepos}
+							</span>
 							<span className="text-gray-400 text-xs">公开仓库</span>
 						</div>
 						<div className="flex flex-col items-center gap-1 py-3">
