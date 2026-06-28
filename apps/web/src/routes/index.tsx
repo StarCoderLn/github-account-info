@@ -107,7 +107,7 @@ function TokenPage() {
 						type="button"
 						onClick={handleAdd}
 						disabled={fetchMut.isPending}
-						className="mt-1 w-full rounded-lg bg-blue-600 py-2.5 font-medium text-sm text-white transition hover:bg-blue-700 disabled:opacity-60"
+						className="mt-1 w-full cursor-pointer rounded-lg bg-blue-600 py-2.5 font-medium text-sm text-white transition hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
 					>
 						{fetchMut.isPending ? "验证中…" : "添加 Token"}
 					</button>
@@ -116,6 +116,8 @@ function TokenPage() {
 
 			{/* Account cards */}
 			{tokens.length > 0 && (
+				<div className="grid gap-3">
+				<p className="text-gray-400 text-xs">点击卡片可查看并编辑账号信息</p>
 				<div className="grid gap-3 sm:grid-cols-2">
 					{tokens.map((t) => (
 						<div
@@ -127,7 +129,7 @@ function TokenPage() {
 							<button
 								type="button"
 								onClick={(e) => handleDelete(e, t.id)}
-								className="absolute right-4 top-4 text-gray-300 transition hover:text-red-500"
+								className="absolute right-4 top-4 cursor-pointer text-gray-300 transition hover:text-red-500"
 							>
 								<Trash2 className="h-4 w-4" />
 							</button>
@@ -175,6 +177,7 @@ function TokenPage() {
 							<p className="mt-3 text-gray-300 text-xs">{t.name} · {t.createdAt}</p>
 						</div>
 					))}
+				</div>
 				</div>
 			)}
 		</div>

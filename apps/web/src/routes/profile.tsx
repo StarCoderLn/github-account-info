@@ -201,7 +201,7 @@ function ProfilePage() {
 				<button
 					type="button"
 					onClick={() => navigate({ to: "/" })}
-					className="flex items-center gap-1.5 text-gray-500 text-sm transition hover:text-gray-900"
+					className="flex cursor-pointer items-center gap-1.5 text-gray-500 text-sm transition hover:text-gray-900"
 				>
 					<ArrowLeft className="h-4 w-4" />
 					返回
@@ -210,7 +210,7 @@ function ProfilePage() {
 					type="button"
 					onClick={handleRefresh}
 					disabled={fetchMut.isPending}
-					className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-gray-500 text-sm transition hover:border-blue-300 hover:text-blue-600 disabled:opacity-50"
+					className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-gray-500 text-sm transition hover:border-blue-300 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					<RefreshCw
 						className={`h-3.5 w-3.5 ${fetchMut.isPending ? "animate-spin" : ""}`}
@@ -341,7 +341,7 @@ function ProfilePage() {
 						type="button"
 						onClick={handleSave}
 						disabled={isPending}
-						className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 font-medium text-sm text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
+						className="flex cursor-pointer items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 font-medium text-sm text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
 					>
 						<Save className="h-4 w-4" />
 						{isPending ? "保存中…" : "保存到数据库"}
