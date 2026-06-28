@@ -15,6 +15,7 @@
     "@github-account-info/env": "workspace:*",
     "@github-account-info/ui": "workspace:*",
     "@hookform/resolvers": "^5.2.2",
+    "react-hook-form": "^7.55.0",
     "@tailwindcss/vite": "^4.2.2",
     "@tanstack/react-query": "^5.90.12",
     "@tanstack/react-router": "^1.168.22",

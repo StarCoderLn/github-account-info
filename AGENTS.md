@@ -1,0 +1,15 @@
+# 项目踩坑与教训(AGENTS.md)
+
+- [T-001] GitHub REST API 坑:不带 `User-Agent` 头会被直接拒绝(403)。所有调 api.github.com 的请求必须显式注入 `User-Agent`,同时带 `Accept: application/vnd.github+json` 和 `X-GitHub-Api-Version: 2022-11-28`。
+- [T-001] GitHub 403 语义重载坑:401=token 无效,但 403 既可能是「限流」也可能是「权限不足」,必须读响应头 `x-ratelimit-remaining === "0"` 来区分,不能笼统当成一种错误处理。
+- [T-001] fetch 超时坑:用 `AbortSignal.timeout(ms)` 触发的超时,抛出的是 `DOMException` 且 `name === "TimeoutError"`(不是 `AbortError`)。catch 里判断超时要按 `TimeoutError` 匹配,否则会误判为普通网络错误。
+- [T-001] 凭证安全约定:第三方 token(如 GitHub PAT)只允许出现在请求头里,禁止写日志、禁止随响应返回给调用方。service 层抛语义化自定义错误,由路由层统一映射为 TRPCError,token 不外泄。
+- [T-001] Drizzle schema GitHub ID 类型陷阱:GitHub 用户 ID 会超过 32 位整型上限(2,147,483,647),若用 `integer()` 建列,真实账号插入时会抛 overflow 错误。必须用 `bigint("github_id", { mode: "number" })` 映射为 PostgreSQL bigint,才能覆盖全部 GitHub ID 空间。凡存储外部平台的数值 ID,先确认其取值范围再选列类型,不要默认用 `integer`。
+- [T-001] shadcn 组件底层是 `@base-ui/react` 而非 Radix UI:本项目 shadcn 风格组件(Dialog、AlertDialog 等)的 primitive 来自 `@base-ui/react/<component-name>`,而非标准 shadcn 文档里的 `@radix-ui/react-*`。动画状态 Tailwind 变体也不同——Base UI 用 `data-open:` / `data-closed:`,Radix 用 `data-[state=open]:` / `data-[state=closed]:`。新增交互组件时不要直接照搬 shadcn 官网代码,需改用 `@base-ui/react` 的导入路径与 API。
+- [T-001] TanStack Router `routeTree.gen.ts` 禁止手动编辑:该文件由开发服务器(`pnpm dev:web`)在检测到 `src/routes/` 变更后自动重新生成。新增路由只需在 `apps/web/src/routes/` 下创建对应文件并用 `createFileRoute("/path")({ component: ... })` 声明即可;手动改动 `routeTree.gen.ts` 会在下次启动时被完全覆盖。
+- [T-002] tRPC 行类型推导约定:前端组件需要消费某个 procedure 的输出类型时,用 `inferRouterOutputs<AppRouter>` 从 `@trpc/server` 推导(`type RouterOutputs = inferRouterOutputs<AppRouter>; type AccountRow = RouterOutputs["account"]["list"][number]`),禁止手写与后端重复的 interface。这样后端改字段后前端会立刻报类型错误,不会出现运行时字段缺失的静默 bug。
+- [T-003] 前后端可选字符串字段 schema 边界陷阱:前端表单用 `z.union([z.string().email(), z.literal("")])` 把"未填"表示为空字符串 `""`,但后端 Drizzle/zod insert schema 的对应列类型是 `string | null | undefined`——空字符串不等于 null。调用 `account.create` / `account.update` mutation 前必须做转换:`email: formData.email === "" ? null : formData.email`。漏掉这步后端 zod 校验会直接拒绝请求。凡前端"可留空"字段与后端"nullable 列"对接时,都需要在 mutation 调用处显式转换,不要依赖 zod coerce 或隐式转换。
+- [T-003] Base UI Dialog 双关闭按钮陷阱:`DialogContent`(来自 `@base-ui/react`) 默认 `showCloseButton=true`,会在右上角渲染 X 图标按钮。若再在 `DialogFooter` 里放文字"关闭/Close"按钮,页面同时存在两个关闭入口。非刻意设计时应二选一:要么在 `DialogContent` 传 `showCloseButton={false}`,只保留 Footer 按钮;要么删掉 Footer 的文字按钮。避免用户困惑。
+- [T-003] 实现文件名须与 spec 保持一致:新建组件前先确认 `specs/` 下 design.md 里标注的文件名,实现时直接用规格里的名字(如 `account-form.tsx` 而非 `account-form-dialog.tsx`)。文件名偏离会导致 review 指出 naming deviation,后续重命名还要同步所有 import。
+- [T-006] update mutation 必须与 create 保持一致的错误处理:create procedure 里若对数据库唯一约束错误做了捕获(如 `isUniqueConstraintError` 映射为 `CONFLICT`),update procedure 里必须同步加入同样的守卫。只在 create 捕获而 update 不捕获,会让编辑操作把内部 DB 错误直接抛给客户端,产生行为不一致的 bug。凡新增带唯一约束的字段,create 与 update 两条路径都要检查。
+- [T-006] 敏感 token 用完即清(不能等 dialog 关闭):GitHub PAT 等临时凭证完成请求后,须在 try 块末尾立即 `setToken(""); fetchMutation.reset()` 清除状态,不能依赖 dialog 关闭时的 `useEffect` else 分支来清除——那样凭证在 React state 里会多存留一个完整渲染周期。设计文档里"token 用完即丢"的安全约定必须在请求成功后立刻兑现,而非在 UI 生命周期结束时。
