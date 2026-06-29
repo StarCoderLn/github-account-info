@@ -1,0 +1,52 @@
+name: Deploy Lambda
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "apps/server/**"
+      - "packages/api/**"
+      - "packages/db/**"
+      - "packages/env/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.24.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Lambda
+        run: node build.mjs
+        working-directory: apps/server
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::879980498268:role/github-actions-deployer
+          aws-region: us-east-2
+
+      - uses: aws-actions/setup-sam@v2
+
+      - name: Deploy Lambda
+        run: |
+          sam deploy --no-confirm-changeset \
+            --parameter-overrides \
+              DatabaseUrl="${{ secrets.AWS_DATABASE_URL }}" \
+              CorsOrigin="https://github-account-info.pages.dev"
+        working-directory: apps/server
