@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { createContext } from "@github-account-info/api/context";
 import { appRouter } from "@github-account-info/api/routers/index";
 import { env } from "@github-account-info/env/server";
