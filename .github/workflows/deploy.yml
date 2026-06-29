@@ -46,7 +46,7 @@ jobs:
 
       - name: Deploy Lambda
         run: |
-          sam deploy --no-confirm-changeset \
+          sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
             --parameter-overrides \
               DatabaseUrl="${{ secrets.AWS_DATABASE_URL }}" \
               CorsOrigin="https://github-account-info.pages.dev"
