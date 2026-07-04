@@ -48,7 +48,6 @@ function TokenPage() {
 
 	const listQuery = useQuery(trpc.account.list.queryOptions());
 	const fetchMut = useMutation(trpc.github.getAccount.mutationOptions());
-	const upsertMut = useMutation(trpc.account.upsert.mutationOptions());
 	const deleteMut = useMutation(trpc.account.delete.mutationOptions());
 
 	// 合并 DB 记录与本地 localStorage token
@@ -126,31 +125,6 @@ function TokenPage() {
 			setToken("");
 			fetchMut.reset();
 			toast.success(`Token "${trimmedName}" 已添加`);
-
-			// 自动同步公开信息到数据库
-			upsertMut.mutate(
-				{
-					login: acc.login,
-					githubId: acc.githubId,
-					name: acc.name,
-					avatarUrl: acc.avatarUrl,
-					bio: acc.bio,
-					company: acc.company,
-					location: acc.location,
-					email: acc.email,
-					blog: acc.blog,
-					twitterUsername: acc.twitterUsername,
-					publicRepos: acc.publicRepos,
-					followers: acc.followers,
-					following: acc.following,
-				},
-				{
-					onSuccess: () =>
-						queryClient.invalidateQueries(trpc.account.list.queryFilter()),
-					onError: () =>
-						toast.warning("账号信息同步数据库失败，可在详情页手动保存"),
-				},
-			);
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Token 验证失败");
 		}
@@ -169,10 +143,15 @@ function TokenPage() {
 			setTokens(getTokens());
 		}
 		if (card.dbId !== undefined) {
+			queryClient.setQueryData(
+				trpc.account.list.queryOptions().queryKey,
+				(old: typeof listQuery.data) =>
+					old?.filter((r) => r.id !== card.dbId) ?? [],
+			);
 			deleteMut.mutate(
 				{ id: card.dbId },
 				{
-					onSuccess: () =>
+					onSettled: () =>
 						queryClient.invalidateQueries(trpc.account.list.queryFilter()),
 				},
 			);
