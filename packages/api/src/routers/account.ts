@@ -91,4 +91,33 @@ export const accountRouter = router({
 			await ctx.db.delete(githubAccount).where(eq(githubAccount.id, input.id));
 			return { id: input.id };
 		}),
+
+	// T-007: upsert — 按 githubId 冲突时更新
+	upsert: publicProcedure
+		.input(githubAccountInsertSchema)
+		.mutation(async ({ input, ctx }) => {
+			const [row] = await ctx.db
+				.insert(githubAccount)
+				.values(input)
+				.onConflictDoUpdate({
+					target: githubAccount.githubId,
+					set: {
+						login: input.login,
+						name: input.name,
+						avatarUrl: input.avatarUrl,
+						bio: input.bio,
+						company: input.company,
+						location: input.location,
+						email: input.email,
+						blog: input.blog,
+						twitterUsername: input.twitterUsername,
+						publicRepos: input.publicRepos,
+						followers: input.followers,
+						following: input.following,
+						updatedAt: new Date(),
+					},
+				})
+				.returning();
+			return row;
+		}),
 });

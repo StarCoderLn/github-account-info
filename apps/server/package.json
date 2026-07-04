@@ -6,7 +6,7 @@
     "build": "node build.mjs",
     "check-types": "tsc -b",
     "compile": "bun build --compile --minify --sourcemap --bytecode ./src/index.ts --outfile server",
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch --env-file=.env --env-file=.env.local src/index.ts",
     "start": "node dist/index.mjs"
   },
   "dependencies": {

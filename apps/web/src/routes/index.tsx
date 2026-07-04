@@ -1,23 +1,43 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { BookOpen, Trash2, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { trpc } from "@/utils/trpc";
 import {
 	addToken,
 	getTokens,
 	removeToken,
-	setSelectedTokenId,
 	type SavedToken,
+	setSelectedTokenId,
 } from "@/utils/token-store";
+import { trpc } from "@/utils/trpc";
 
 export const Route = createFileRoute("/")({
 	component: TokenPage,
 });
 
+function formatDate(d: Date): string {
+	return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+type MergedCard = {
+	key: string;
+	login: string;
+	displayName: string | null;
+	avatarUrl: string | null;
+	publicRepos: number;
+	followers: number;
+	following: number;
+	label: string;
+	timestamp: string;
+	hasLocalToken: boolean;
+	localTokenId: string | undefined;
+	dbId: number | undefined;
+};
+
 function TokenPage() {
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 	const [name, setName] = useState("");
 	const [token, setToken] = useState("");
 	const [tokens, setTokens] = useState<SavedToken[]>([]);
@@ -26,18 +46,67 @@ function TokenPage() {
 		setTokens(getTokens());
 	}, []);
 
+	const listQuery = useQuery(trpc.account.list.queryOptions());
 	const fetchMut = useMutation(trpc.github.getAccount.mutationOptions());
+	const upsertMut = useMutation(trpc.account.upsert.mutationOptions());
+	const deleteMut = useMutation(trpc.account.delete.mutationOptions());
+
+	// 合并 DB 记录与本地 localStorage token
+	const dbCards: MergedCard[] = (listQuery.data ?? []).map((r) => {
+		const localToken = tokens.find((t) => t.login === r.login);
+		return {
+			key: `db-${r.id}`,
+			login: r.login,
+			displayName: r.name,
+			avatarUrl: r.avatarUrl,
+			publicRepos: r.publicRepos,
+			followers: r.followers,
+			following: r.following,
+			label: localToken?.name ?? r.login,
+			timestamp: formatDate(new Date(r.updatedAt)),
+			hasLocalToken: !!localToken,
+			localTokenId: localToken?.id,
+			dbId: r.id,
+		};
+	});
+
+	// 本地有但还未同步到 DB 的 token
+	const localOnlyCards: MergedCard[] = tokens
+		.filter((t) => !listQuery.data?.some((r) => r.login === t.login))
+		.map((t) => ({
+			key: `local-${t.id}`,
+			login: t.login,
+			displayName: t.displayName,
+			avatarUrl: t.avatarUrl,
+			publicRepos: t.publicRepos,
+			followers: t.followers,
+			following: t.following,
+			label: t.name,
+			timestamp: t.createdAt,
+			hasLocalToken: true,
+			localTokenId: t.id,
+			dbId: undefined,
+		}));
+
+	const allCards = [...dbCards, ...localOnlyCards];
+	const hasEditableCards = allCards.some((c) => c.hasLocalToken);
 
 	const handleAdd = async () => {
 		const trimmedName = name.trim();
 		const trimmedToken = token.trim();
-		if (!trimmedName) { toast.error("请输入 Token 名称"); return; }
-		if (!trimmedToken) { toast.error("请输入 Token 值"); return; }
+		if (!trimmedName) {
+			toast.error("请输入 Token 名称");
+			return;
+		}
+		if (!trimmedToken) {
+			toast.error("请输入 Token 值");
+			return;
+		}
 		try {
 			const acc = await fetchMut.mutateAsync({ token: trimmedToken });
 			const id = crypto.randomUUID();
 			const now = new Date();
-			const createdAt = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+			const createdAt = formatDate(now);
 			const saved: SavedToken = {
 				id,
 				name: trimmedName,
@@ -57,20 +126,57 @@ function TokenPage() {
 			setToken("");
 			fetchMut.reset();
 			toast.success(`Token "${trimmedName}" 已添加`);
+
+			// 自动同步公开信息到数据库
+			upsertMut.mutate(
+				{
+					login: acc.login,
+					githubId: acc.githubId,
+					name: acc.name,
+					avatarUrl: acc.avatarUrl,
+					bio: acc.bio,
+					company: acc.company,
+					location: acc.location,
+					email: acc.email,
+					blog: acc.blog,
+					twitterUsername: acc.twitterUsername,
+					publicRepos: acc.publicRepos,
+					followers: acc.followers,
+					following: acc.following,
+				},
+				{
+					onSuccess: () =>
+						queryClient.invalidateQueries(trpc.account.list.queryFilter()),
+					onError: () =>
+						toast.warning("账号信息同步数据库失败，可在详情页手动保存"),
+				},
+			);
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Token 验证失败");
 		}
 	};
 
-	const handleCardClick = (t: SavedToken) => {
-		setSelectedTokenId(t.id);
+	const handleCardClick = (card: MergedCard) => {
+		if (!card.hasLocalToken || !card.localTokenId) return;
+		setSelectedTokenId(card.localTokenId);
 		navigate({ to: "/profile" });
 	};
 
-	const handleDelete = (e: React.MouseEvent, id: string) => {
+	const handleDelete = (e: React.MouseEvent, card: MergedCard) => {
 		e.stopPropagation();
-		removeToken(id);
-		setTokens(getTokens());
+		if (card.localTokenId) {
+			removeToken(card.localTokenId);
+			setTokens(getTokens());
+		}
+		if (card.dbId !== undefined) {
+			deleteMut.mutate(
+				{ id: card.dbId },
+				{
+					onSuccess: () =>
+						queryClient.invalidateQueries(trpc.account.list.queryFilter()),
+				},
+			);
+		}
 	};
 
 	return (
@@ -99,7 +205,9 @@ function TokenPage() {
 							placeholder="ghp_..."
 							value={token}
 							onChange={(e) => setToken(e.target.value)}
-							onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") handleAdd();
+							}}
 							className="rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
 						/>
 					</div>
@@ -107,7 +215,7 @@ function TokenPage() {
 						type="button"
 						onClick={handleAdd}
 						disabled={fetchMut.isPending}
-						className="mt-1 w-full cursor-pointer rounded-lg bg-blue-600 py-2.5 font-medium text-sm text-white transition hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+						className="mt-1 w-full cursor-pointer rounded-lg bg-blue-600 py-2.5 font-medium text-sm text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
 					>
 						{fetchMut.isPending ? "验证中…" : "添加 Token"}
 					</button>
@@ -115,69 +223,87 @@ function TokenPage() {
 			</div>
 
 			{/* Account cards */}
-			{tokens.length > 0 && (
+			{allCards.length > 0 && (
 				<div className="grid gap-3">
-				<p className="text-gray-400 text-xs">点击卡片可查看并编辑账号信息</p>
-				<div className="grid gap-3 sm:grid-cols-2">
-					{tokens.map((t) => (
-						<div
-							key={t.id}
-							onClick={() => handleCardClick(t)}
-							className="group relative cursor-pointer rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition hover:border-blue-300 hover:shadow-md"
-						>
-							{/* Delete button */}
-							<button
-								type="button"
-								onClick={(e) => handleDelete(e, t.id)}
-								className="absolute right-4 top-4 cursor-pointer text-gray-300 transition hover:text-red-500"
+					{hasEditableCards && (
+						<p className="text-gray-400 text-xs">
+							点击卡片可查看并编辑账号信息
+						</p>
+					)}
+					<div className="grid gap-3 sm:grid-cols-2">
+						{allCards.map((card) => (
+							<div
+								key={card.key}
+								onClick={() => handleCardClick(card)}
+								className={`group relative rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition ${
+									card.hasLocalToken
+										? "cursor-pointer hover:border-blue-300 hover:shadow-md"
+										: "cursor-default opacity-80"
+								}`}
 							>
-								<Trash2 className="h-4 w-4" />
-							</button>
-
-							{/* Avatar + name */}
-							<div className="mb-4 flex items-center gap-3">
-								{t.avatarUrl ? (
-									<img
-										src={t.avatarUrl}
-										alt={t.login}
-										className="h-12 w-12 rounded-full border border-gray-100"
-									/>
-								) : (
-									<div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 font-bold text-blue-500 text-lg">
-										{t.login.slice(0, 1).toUpperCase()}
-									</div>
+								{/* Delete button — 仅本地有 token 时显示 */}
+								{card.hasLocalToken && (
+									<button
+										type="button"
+										onClick={(e) => handleDelete(e, card)}
+										className="absolute top-4 right-4 cursor-pointer text-gray-300 transition hover:text-red-500"
+									>
+										<Trash2 className="h-4 w-4" />
+									</button>
 								)}
-								<div className="min-w-0">
-									<p className="truncate font-semibold text-gray-900 text-sm">
-										{t.displayName ?? t.login}
-									</p>
-									<p className="text-gray-400 text-xs">@{t.login}</p>
-								</div>
-							</div>
 
-							{/* Stats */}
-							<div className="grid grid-cols-3 divide-x divide-gray-100 rounded-lg border border-gray-100 bg-gray-50 text-center text-xs">
-								<div className="flex flex-col items-center gap-0.5 py-2.5">
-									<BookOpen className="h-3.5 w-3.5 text-blue-400" />
-									<span className="font-bold text-blue-600">{t.publicRepos}</span>
-									<span className="text-gray-400">公开仓库</span>
+								{/* Avatar + name */}
+								<div className="mb-4 flex items-center gap-3">
+									{card.avatarUrl ? (
+										<img
+											src={card.avatarUrl}
+											alt={card.login}
+											className="h-12 w-12 rounded-full border border-gray-100"
+										/>
+									) : (
+										<div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 font-bold text-blue-500 text-lg">
+											{card.login.slice(0, 1).toUpperCase()}
+										</div>
+									)}
+									<div className="min-w-0">
+										<p className="truncate font-semibold text-gray-900 text-sm">
+											{card.displayName ?? card.login}
+										</p>
+										<p className="text-gray-400 text-xs">@{card.login}</p>
+									</div>
 								</div>
-								<div className="flex flex-col items-center gap-0.5 py-2.5">
-									<Users className="h-3.5 w-3.5 text-blue-400" />
-									<span className="font-bold text-blue-600">{t.followers}</span>
-									<span className="text-gray-400">关注者</span>
-								</div>
-								<div className="flex flex-col items-center gap-0.5 py-2.5">
-									<Users className="h-3.5 w-3.5 text-blue-400" />
-									<span className="font-bold text-blue-600">{t.following}</span>
-									<span className="text-gray-400">正在关注</span>
-								</div>
-							</div>
 
-							<p className="mt-3 text-gray-300 text-xs">{t.name} · {t.createdAt}</p>
-						</div>
-					))}
-				</div>
+								{/* Stats */}
+								<div className="grid grid-cols-3 divide-x divide-gray-100 rounded-lg border border-gray-100 bg-gray-50 text-center text-xs">
+									<div className="flex flex-col items-center gap-0.5 py-2.5">
+										<BookOpen className="h-3.5 w-3.5 text-blue-400" />
+										<span className="font-bold text-blue-600">
+											{card.publicRepos}
+										</span>
+										<span className="text-gray-400">公开仓库</span>
+									</div>
+									<div className="flex flex-col items-center gap-0.5 py-2.5">
+										<Users className="h-3.5 w-3.5 text-blue-400" />
+										<span className="font-bold text-blue-600">
+											{card.followers}
+										</span>
+										<span className="text-gray-400">关注者</span>
+									</div>
+									<div className="flex flex-col items-center gap-0.5 py-2.5">
+										<Users className="h-3.5 w-3.5 text-blue-400" />
+										<span className="font-bold text-blue-600">
+											{card.following}
+										</span>
+										<span className="text-gray-400">正在关注</span>
+									</div>
+								</div>
+
+								<p className="mt-3 text-gray-300 text-xs">
+									{card.label} · {card.timestamp}
+								</p>
+							</div>
+						))}
+					</div>
 				</div>
 			)}
 		</div>

@@ -5,7 +5,10 @@ import { Pool } from "pg";
 import * as schema from "./schema";
 
 export function createDb() {
-	const pool = new Pool({ connectionString: env.DATABASE_URL });
+	const pool = new Pool({
+		connectionString: env.DATABASE_URL,
+		ssl: { rejectUnauthorized: false },
+	});
 	return drizzle(pool, { schema });
 }
 
