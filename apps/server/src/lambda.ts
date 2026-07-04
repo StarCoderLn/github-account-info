@@ -2,8 +2,8 @@ import { createContext } from "@github-account-info/api/context";
 import { appRouter } from "@github-account-info/api/routers/index";
 import { env } from "@github-account-info/env/server";
 import { trpcServer } from "@hono/trpc-server";
-import { handle } from "hono/aws-lambda";
 import { Hono } from "hono";
+import { handle } from "hono/aws-lambda";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 
