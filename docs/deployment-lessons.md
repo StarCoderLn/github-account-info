@@ -1,0 +1,850 @@
+# 全栈项目部署踩坑与经验笔记
+
+> 项目：github-account-info（Turborepo + pnpm monorepo）
+> 部署拓扑：前端 Cloudflare Pages + 后端 AWS Lambda（SAM）+ 数据库 AWS RDS PostgreSQL（私有子网）
+> 记录时间：2026-07
+
+---
+
+## 目录
+
+**第一部分：架构与实施**
+
+1. [整体架构与部署链路](#1-整体架构与部署链路)
+   - [1.1 全景架构图](#11-全景架构图)
+   - [1.2 一次页面访问的完整请求链路](#12-一次页面访问的完整请求链路)
+   - [1.3 组件清单](#13-组件清单)
+   - [1.4 本地入口与云上入口：一套业务，两个装配](#14-本地入口与云上入口一套业务两个装配)
+   - [1.5 四条部署/开发链路](#15-四条部署开发链路)
+   - [1.6 网络与安全边界](#16-网络与安全边界)
+2. [部署实施过程：当初的计划与每一步的落地](#2-部署实施过程当初的计划与每一步的落地)
+   - [2.1 出发点：可行性分析先行](#21-出发点可行性分析先行)
+   - [2.2 当初列的六步计划](#22-当初列的六步计划)
+   - [2.3 每一步实际是怎么做的](#23-每一步实际是怎么做的)
+     - [步骤 1：改代码（双入口 + 换驱动 + 打包脚本）](#步骤-1改代码双入口--换驱动--打包脚本)
+     - [步骤 2：本地验证](#步骤-2本地验证)
+     - [步骤 3：控制台手动创建网络与 RDS（8 个子步骤）](#步骤-3控制台手动创建网络与-rds)
+     - [步骤 4：写 SAM template.yaml（逐行注释 + samconfig.toml）](#步骤-4写-sam-templateyaml)
+     - [步骤 5：sam deploy 部署 Lambda](#步骤-5sam-deploy-部署-lambda)
+     - [步骤 6：配 Cloudflare Pages](#步骤-6配-cloudflare-pages)
+   - [2.4 计划之外追加的三件事](#24-计划之外追加的三件事)
+   - [2.5 回头看这份计划](#25-回头看这份计划)
+
+**第二部分：部署与 CI/CD**
+
+3. [AWS Lambda 部署：环境变量不走 .env](#3-aws-lambda-部署环境变量不走-env)
+4. [GitHub Actions + OIDC：免密钥部署 AWS（deploy.yml 逐行注释）](#4-github-actions--oidc免密钥部署-aws)
+5. [本地开发连私有子网 RDS：SSM 隧道](#5-本地开发连私有子网-rdsssm-隧道)
+
+**第三部分：踩坑实录**
+
+6. [ESM import 提升：dotenv 为什么失效](#6-esm-import-提升dotenv-为什么失效)
+7. [Node.js --env-file：last-wins 语义](#7-nodejs---env-filelast-wins-语义)
+8. [pg 8.22 的 SSL 大坑：sslmode=require 语义变了](#8-pg-822-的-ssl-大坑sslmoderequire-语义变了)
+   - [8.1 sslmode=require 语义变更](#81-pg8220-起-sslmoderequire--完整证书校验)
+   - [8.2 连接串 sslmode 覆盖 Pool 选项](#82-连接串里的-sslmode-会覆盖-pool-的-ssl-选项)
+   - [8.3 RDS 强制 SSL](#83-rds-强制-ssl不能干脆禁用)
+   - [8.4 最终解法](#84-最终解法)
+9. [浏览器报 CORS 错误 ≠ 真的是 CORS 问题](#9-浏览器报-cors-错误--真的是-cors-问题)
+10. [Cloudflare Pages 自动部署的坑](#10-cloudflare-pages-自动部署的坑)
+    - [10.1 连续快速 push 会取消前一次构建](#101-连续快速-push-会取消前一次构建)
+    - [10.2 monorepo 下 Watch Paths 不可靠](#102-monorepo-下-build-watch-paths-不可靠重点坑)
+    - [10.3 部署单位是分支最新代码](#103-部署单位是分支最新代码不是逐个提交)
+11. [CloudFormation 并发部署：OBSOLETE changeset](#11-cloudformation-并发部署obsolete-changeset)
+
+**第四部分：前端与总结**
+
+12. [前端 TanStack Query 交互经验](#12-前端-tanstack-query-交互经验)
+    - [12.1 删除交互的"中间态"bug](#121-删除交互的中间态bug)
+    - [12.2 refetchOnWindowFocus](#122-refetchonwindowfocus)
+    - [12.3 隐式的自动同步会破坏用户心智模型](#123-隐式的自动同步会破坏用户心智模型)
+13. [错误速查表](#13-错误速查表)
+14. [通用方法论沉淀](#14-通用方法论沉淀)
+
+---
+
+## 1. 整体架构与部署链路
+
+### 1.1 全景架构图
+
+![github-account-info 整体架构图](./architecture.png)
+
+> 源文件：[architecture.svg](./architecture.svg)（矢量图，可编辑）。下面的 mermaid 版本便于在支持 mermaid 的工具里直接渲染与修改。
+
+```mermaid
+flowchart TB
+	Browser["用户浏览器"]
+	GitHubAPI["GitHub API<br/>api.github.com（Bearer PAT 调用）"]
+
+	subgraph CF["Cloudflare Pages（全球 CDN）"]
+		Web["apps/web 构建产物（纯静态 SPA）<br/>React + Vite<br/>TanStack Router / Query<br/>tRPC client<br/>构建时注入 VITE_SERVER_URL"]
+	end
+
+	subgraph AWS["AWS us-east-2（俄亥俄）"]
+		APIGW["API Gateway（HttpApi）<br/>路由: ANY /{proxy+} 与 ANY /"]
+
+		subgraph VPC["VPC（10.0.0.0/16）"]
+			subgraph SubA["私有子网 A：Lambda（10.0.2.0/24 · us-east-2a）"]
+				Lambda["Lambda: github-account-info-api<br/>nodejs22.x / 256MB / 30s<br/>handler: lambda.handler（Hono + tRPC）<br/>env: DATABASE_URL / CORS_ORIGIN"]
+			end
+			subgraph SubB["私有子网 B：RDS（10.0.3.0/24 · us-east-2b）"]
+				RDS[("RDS PostgreSQL<br/>github-account-info-db<br/>库名: github_account_info<br/>无公网入口，安全组仅放行<br/>Lambda SG 与跳板机 SG 的 :5432")]
+			end
+			subgraph Pub["公有子网：出站网关子网（路由 0.0.0.0/0 → IGW）"]
+				NAT["NAT Gateway<br/>私有子网统一出站"]
+				IGW["Internet Gateway（IGW）<br/>连接公网"]
+				EC2["跳板 EC2（零入站）<br/>i-0fe5bdd02a913b64a<br/>SSM Agent 出站 443"]
+			end
+		end
+	end
+
+	Dev["开发机<br/>localhost:5433 端口转发"]
+
+	Browser -->|"① 加载静态资源<br/>github-account-info.pages.dev"| Web
+	Browser -->|"② 调用 API（tRPC over HTTP）<br/>mdgq1tigyl.execute-api<br/>.us-east-2.amazonaws.com/trpc/*"| APIGW
+	Web -.->|"VITE_SERVER_URL 指向"| APIGW
+	APIGW -->|"事件触发（proxy 集成）"| Lambda
+	Lambda -->|"VPC 内网直连 :5432"| RDS
+	Lambda -->|"出站访问 GitHub"| NAT
+	NAT --> IGW
+	IGW -->|"GET api.github.com/user"| GitHubAPI
+	Dev -.->|"SSM 加密通道（仅出站 443）"| EC2
+	RDS -.-|"跳板转发 :5432"| EC2
+```
+
+### 1.2 一次页面访问的完整请求链路
+
+以"打开首页看到账号卡片列表"为例，走完整个链路：
+
+```mermaid
+sequenceDiagram
+	participant B as 浏览器
+	participant CF as Cloudflare Pages<br/>（边缘节点）
+	participant GW as API Gateway<br/>（HttpApi）
+	participant L as Lambda<br/>（Hono + tRPC）
+	participant DB as RDS PostgreSQL
+
+	B->>CF: GET github-account-info.pages.dev
+	CF-->>B: index.html + JS/CSS（纯静态，无源站）
+	Note over B: React 挂载，TanStack Router 渲染 /<br/>TanStack Query 发起 account.list
+	B->>GW: GET /trpc/account.list<br/>（query 走 GET，mutation 走 POST，<br/>httpBatchLink 合并并发请求）
+	GW->>L: ANY /{proxy+} 事件触发<br/>（冷启动时先初始化模块）
+	Note over L: Hono 中间件链：<br/>logger → cors（校验 Origin）→ trpcServer
+	L->>DB: Drizzle（pg Pool）参数化查询<br/>VPC 内网 :5432
+	DB-->>L: 查询结果
+	L-->>GW: JSON（tRPC 响应）
+	GW-->>B: 响应（带 CORS 头）
+	Note over B: Query 缓存写入并渲染卡片
+```
+
+前后端的类型安全贯穿这条链：`packages/api` 导出 `AppRouter` 类型 → 前端 tRPC client 推导出每个 procedure 的入参/返回类型，全程无手写接口类型。
+
+### 1.3 组件清单
+
+| 层 | 技术/资源 | 位置 | 说明 |
+| --- | --- | --- | --- |
+| 前端托管 | Cloudflare Pages | `github-account-info.pages.dev` | 纯静态 SPA，全球 CDN，Git 集成自动构建 |
+| 前端应用 | React + Vite + TanStack Router/Query + tRPC client | `apps/web` | 构建产物 `apps/web/dist` |
+| API 入口 | API Gateway HttpApi | us-east-2 | `ANY /{proxy+}` + `ANY /` 全量代理给 Lambda |
+| 后端运行时 | Lambda `github-account-info-api` | us-east-2，VPC 内 | nodejs22.x / 256MB / 30s，Hono + tRPC |
+| 后端代码 | Hono 装配层 + tRPC procedure | `apps/server`（装配）+ `packages/api`（业务） | 本地入口 `src/index.ts`，云上入口 `src/lambda.ts` |
+| 数据层 | Drizzle ORM + pg Pool | `packages/db` | schema、migration、连接管理统一在此 |
+| 数据库 | RDS PostgreSQL | us-east-2 私有子网 | 无公网入口，仅 VPC 内可达 |
+| 环境变量 | `@t3-oss/env-core` + zod | `packages/env` | server/web 两份 schema，启动时校验 |
+| IaC | AWS SAM（CloudFormation） | `apps/server/template.yaml` | stack 名 `github-account-info` |
+| CI/CD（后端） | GitHub Actions + OIDC | `.github/workflows/deploy.yml` | 免长期密钥 |
+| CI/CD（前端） | Cloudflare Pages Git 集成 | Dashboard 配置 | 构建命令 `pnpm --filter web build` |
+
+### 1.4 本地入口与云上入口：一套业务，两个装配
+
+`apps/server` 有两个入口文件，共享同一个 Hono app 结构和全部业务代码（`packages/api`），只有"怎么跑起来"不同：
+
+| | `src/index.ts`（本地开发） | `src/lambda.ts`（云上） |
+| --- | --- | --- |
+| 启动方式 | `@hono/node-server` 的 `serve()` 起 HTTP 服务，监听 3000 | `hono/aws-lambda` 的 `handle(app)` 导出 `handler` |
+| 环境变量来源 | `--env-file=.env --env-file=.env.local` | Lambda 环境变量（CloudFormation 注入） |
+| 数据库路径 | localhost:5433 → SSM 隧道 → RDS | VPC 内网直连 RDS |
+| CORS_ORIGIN | `http://localhost:3001`（本地 Vite） | `https://github-account-info.pages.dev` |
+
+这个"业务下沉到 packages、入口只做装配"的结构是能双入口的前提——如果业务逻辑写在 server 层，本地/云上就得维护两份。
+
+### 1.5 四条部署/开发链路
+
+**链路 A：前端自动部署（Cloudflare Pages Git 集成）**
+
+```
+git push master
+  → Cloudflare 拉取仓库最新代码
+  → pnpm install（monorepo 全量）
+  → pnpm --filter web build（Vite 构建，注入 Dashboard 里配置的 VITE_SERVER_URL）
+  → 产物 apps/web/dist 发布到全球 CDN
+  → 生产域名 github-account-info.pages.dev 切换到新版本
+```
+
+配置要点：构建命令、输出目录、环境变量都在 Cloudflare Dashboard 配置（不在仓库里）；Watch Paths 已清空（见第 10 节的坑）。
+
+**链路 B：后端自动部署（GitHub Actions + SAM）**
+
+```
+git push master（且改动命中 paths 过滤: apps/server/** 或 packages/{api,db,env}/**）
+  → actions/checkout + pnpm install
+  → node build.mjs
+      esbuild 把 src/lambda.ts 连同所有 workspace 依赖打成单文件 dist/lambda.mjs
+      （format: esm + createRequire banner，解决 CJS 依赖在 ESM bundle 里的兼容）
+  → configure-aws-credentials 用 OIDC 换取短期凭证（扮演 github-actions-deployer 角色）
+  → sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
+      --parameter-overrides DatabaseUrl=${{ secrets.AWS_DATABASE_URL }} CorsOrigin=https://...
+  → CloudFormation 对比 changeset → 更新 Lambda 代码/配置
+```
+
+**链路 C：本地手动部署后端（应急/首次）**
+
+```
+pnpm --filter server build（或 cd apps/server && node build.mjs）
+  → node deploy.mjs
+      读取 apps/server/.env 里的 DATABASE_URL / CORS_ORIGIN
+      拼出 sam deploy --parameter-overrides ... 并执行
+      （本地 AWS CLI 凭证，samconfig.toml 提供 stack 名/region/S3 等默认参数）
+```
+
+这就是为什么 `apps/server/.env` 里放的是**生产值**——它是手动部署的参数来源，不是本地运行时配置（本地运行时被 `.env.local` 覆盖，见第 7 节）。
+
+**链路 D：本地开发环境**
+
+```
+终端 1: pnpm db:tunnel      # SSM 端口转发 localhost:5433 → RDS:5432（保持前台）
+终端 2: pnpm dev:server     # tsx watch，读 .env + .env.local，监听 :3000
+终端 3: pnpm dev:web        # Vite dev server，监听 :3001
+浏览器: http://localhost:3001 → 调 http://localhost:3000/trpc/* → 隧道 → RDS
+```
+
+### 1.6 网络与安全边界
+
+- **RDS 零公网暴露**：没有公网地址，安全组只放行 VPC 内的 Lambda 安全组和跳板 EC2。即使连接串泄露，公网也连不上。
+- **跳板 EC2 零入站端口**：SSM Session Manager 走 EC2 上 SSM Agent 的**出站** 443 长连接，本地 `aws ssm start-session` 经 AWS 侧中转，EC2 安全组不需要开 22 或任何入站规则。
+- **Lambda 进 VPC 的代价**：能内网连 RDS，但默认**失去公网出口**（本项目 Lambda 需要调 GitHub API，依赖子网的 NAT 出口；这是 VPC Lambda 的经典注意点）。
+- **密钥流转**（详见第 3 节）：真实连接串只存在于三处——本地 `.env`（gitignore）、GitHub Secrets、Lambda 环境变量，仓库代码里零密钥。
+
+**经验**：
+- 前后端各自的触发路径要覆盖它们真正依赖的所有包。monorepo 中前端依赖 `packages/api`（类型）、`packages/ui`、`packages/env`，后端依赖 `packages/api`、`packages/db`、`packages/env`，漏配任何一个都会出现"改了代码但没部署"的诡异现象。
+- 前端"部署"的本质是把静态文件铺到 CDN，后端"部署"的本质是更新 Lambda 的代码包和环境变量——两者生命周期完全独立，唯一的耦合点是 `VITE_SERVER_URL`（前端构建时烧进产物里，改 API 地址必须重新构建前端）。
+
+---
+
+## 2. 部署实施过程：当初的计划与每一步的落地
+
+> 这一节还原整个部署是"怎么一步步做出来的"——先有可行性分析，再有六步计划，然后逐步落地，中途又追加了三件计划外的事。后面各节的坑都是在这些步骤里踩出来的。
+
+### 2.1 出发点：可行性分析先行
+
+项目原本是纯本地开发形态，直接搬上云跑不起来。动手前先做了一轮可行性分析，结论是**方案可行，但有三处不兼容必须先改**：
+
+| # | 不兼容点 | 原因 | 改法 |
+| --- | --- | --- | --- |
+| 1 | 服务器运行方式 | `@hono/node-server` 的 `serve()` 是长驻 HTTP 服务，Lambda 要的是导出一个 `handler` 函数、每次请求触发一次 | 新增 `hono/aws-lambda` 的 `handle(app)` 入口 |
+| 2 | 数据库驱动 | 原来用 `@neondatabase/serverless` + `drizzle-orm/neon-http`，是 Neon 专用 HTTP 协议，连不上标准 PostgreSQL | 换 `pg`（node-postgres）+ `drizzle-orm/node-postgres`，走标准 TCP |
+| 3 | 环境变量方式 | 本地靠 dotenv 读 `.env`，Lambda 不读 `.env` 文件 | 环境变量经 SAM template 参数注入（见第 3 节） |
+
+前端结论则是"几乎零改动"：Vite 构建产物本来就是纯静态文件，Cloudflare Pages 直接托管。
+
+**方法论**：迁移类任务先列"不兼容点清单"再动手，而不是边搬边发现。这三个点决定了后面所有步骤的顺序。
+
+### 2.2 当初列的六步计划
+
+```
+1. 先改代码（DB 驱动 + Lambda 入口）
+2. 本地验证类型检查通过
+3. 手动在 AWS 控制台创建 RDS（私有子网）
+4. 写 SAM template.yaml，配置 VPC/安全组
+5. sam build && sam deploy
+6. 最后配 Cloudflare Pages，填入 API Gateway URL
+```
+
+排序的核心逻辑：**先代码后基础设施**——因为 AWS 侧的部署依赖打包产物，代码不改完，后面全是空转。分工是：代码改动由 AI 直接完成，AWS 控制台操作按指导手动执行。
+
+### 2.3 每一步实际是怎么做的
+
+#### 步骤 1：改代码（双入口 + 换驱动 + 打包脚本）
+
+**换数据库驱动**（`packages/db/src/index.ts`）：
+
+```ts
+// 之前（Neon 专用，连不上 RDS）
+import { neon } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/neon-http";
+
+// 之后（标准 PostgreSQL TCP）
+import { Pool } from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
+
+export function createDb() {
+	const pool = new Pool({
+		connectionString: env.DATABASE_URL,
+		ssl: { rejectUnauthorized: false }, // 这行是后来踩了 SSL 坑补的，见第 8 节
+	});
+	return drizzle(pool, { schema });
+}
+```
+
+同时 `packages/db/package.json` 依赖换成 `pg` + `@types/pg`。
+
+**新增 Lambda 入口**（`apps/server/src/lambda.ts`）：没有改掉原来的 `index.ts`，而是**新增一个云上入口**，形成"一套业务、两个装配"的双入口结构（详见 1.4 节）：
+
+```ts
+import { handle } from "hono/aws-lambda";
+// ...同样的 Hono app（logger → cors → trpcServer）
+export const handler = handle(app);
+```
+
+**打包脚本**（`apps/server/build.mjs`）：用 esbuild 把 `lambda.ts` 连同所有 workspace 依赖打成单文件 `dist/lambda.mjs`，`format: esm` + `createRequire` banner 解决 pg 等 CJS 依赖在 ESM bundle 里的兼容问题。
+
+#### 步骤 2：本地验证
+
+```bash
+pnpm run check-types   # 全仓库类型检查
+pnpm run check         # Biome lint + 格式化
+```
+
+类型体系是 monorepo 的安全网：驱动换掉后，所有引用 `db` 的 procedure 类型是否还成立，这一步就能全部暴露。
+
+#### 步骤 3：控制台手动创建网络与 RDS
+
+这是纯 AWS 控制台操作（AI 指导、手动点击），产出了整个网络边界。全程在 **us-east-2（俄亥俄）** 区域操作，按依赖顺序共 8 个子步骤：
+
+**3-1 创建 VPC**
+
+控制台搜索 **VPC** → 左侧 **Your VPCs** → **Create VPC**：
+- Resources to create：选 `VPC only`（手动创建子网，看清每一步在做什么，不用 "VPC and more" 一键向导）
+- Name tag：`github-account-info-vpc`
+- IPv4 CIDR block：`10.0.0.0/16`（RFC 1918 私有地址段，`10.0.x.x` 整段归这个 VPC）
+- 其余默认，Create
+
+**3-2 创建三个子网**
+
+左侧 **Subnets** → **Create subnet** → 先选中 `github-account-info-vpc`，用 **Add new subnet** 一次填完三个：
+
+| 子网名 | AZ | CIDR | 用途 |
+|---|---|---|---|
+| `public-subnet` | us-east-2a | `10.0.1.0/24` | 出站网关子网（NAT/IGW，后来跳板 EC2 也在这） |
+| `private-subnet-lambda` | us-east-2a | `10.0.2.0/24` | Lambda |
+| `private-subnet-rds` | us-east-2b | `10.0.3.0/24` | RDS |
+
+> 最初规划了 4 个子网（两个公有做 NAT 高可用），砍成 3 个——学习/个人项目没必要为 NAT 做双 AZ 冗余。CIDR 划分就是简单的不重叠切块：/16 切成若干 /24。
+
+**3-3 创建并绑定 Internet Gateway**
+
+左侧 **Internet gateways** → **Create internet gateway**，Name `github-account-info-igw` → 创建完成后页面提示 **Attach to a VPC**，选中 VPC 绑定。State 变为 `Attached` 即成功。IGW 是 NAT 的前置依赖（NAT 出公网要经它）。
+
+**3-4 创建 NAT Gateway**
+
+左侧 **NAT gateways** → **Create NAT gateway**：
+- Name：`github-account-info-nat`
+- Subnet：**必须选 `public-subnet`**（NAT 本体要放公有子网才能出网）
+- Connectivity type：`Public`
+- Elastic IP：点 **Allocate Elastic IP** 自动分配一个公网 IP
+
+创建后 State 会 `Pending` 1~2 分钟，不用干等，继续下一步。
+
+**3-5 配置两张路由表**
+
+左侧 **Route tables** → **Create route table**，各建一张并做两件事（**Routes 标签加规则、Subnet associations 标签关联子网**）：
+
+| 路由表 | 路由规则 | 关联子网 |
+|---|---|---|
+| `public-rtb` | `0.0.0.0/0 → IGW` | `public-subnet` |
+| `private-rtb` | `0.0.0.0/0 → NAT Gateway` | `private-subnet-lambda` + `private-subnet-rds` |
+
+> `10.0.0.0/16 → local` 是每张表自带的。匹配规则是**最长前缀优先**：目标是 VPC 内 IP 走 `local`，其他全部落到默认路由 `0.0.0.0/0`——这是通用网络知识，Linux/路由器都一样。配完确认 "Subnets without explicit associations" 为 0。
+
+**3-6 创建两个安全组**
+
+左侧 **Security groups** → **Create security group**，各一个，都挂在 `github-account-info-vpc`：
+
+| 安全组 | Inbound | Outbound | 说明 |
+|---|---|---|---|
+| `github-account-info-lambda-sg` | **不加任何规则**（Lambda 不接受入站） | 默认全放行 | 给 Lambda 用 |
+| `github-account-info-rds-sg` | 一条：Type `PostgreSQL`(5432)，Source 选 Custom → **选 lambda-sg 的安全组 ID** | 默认 | 只允许 Lambda 连进来 |
+
+> 用**安全组引用安全组**（而不是 IP 段）做来源，是 VPC 内最干净的授权方式。后来加跳板机时，又往 rds-sg 追加了一条放行 bastion-sg 的 5432。
+
+**3-7 创建 DB 子网组**
+
+搜索 **RDS** → 左侧 **Subnet groups** → **Create DB subnet group**：
+- Name：`github-account-info-subnet-group`
+- VPC：`github-account-info-vpc`
+- AZ：勾 `us-east-2a` 和 `us-east-2b`，Subnets 勾 `private-subnet-lambda` + `private-subnet-rds`
+
+> **当时踩的坑**：第一次误选了 `public-subnet` + `private-subnet-lambda`——两个都在 2a 且公有子网不该放 RDS，被打回重选。RDS 子网组**强制要求跨两个 AZ**，这就是 Lambda 子网被拉进组里凑数的原因（实例实际只落在 `private-subnet-rds`）。
+
+**3-8 创建 RDS 实例**
+
+左侧 **Databases** → **Create database**：
+- Creation method：`Standard create`；Engine：`PostgreSQL`（不是 Aurora），版本选 **16.x** 稳定版（当时有 18 但不选最新）
+- Templates：`Free tier`
+- DB instance identifier：`github-account-info-db`；Master username：`postgres`；密码 Self managed 自设并记牢
+- **Connectivity**：VPC 选自建的，DB subnet group 选 3-7 建的，**Public access：`No`**，安全组移除 default、只挂 `github-account-info-rds-sg`
+- Additional configuration：**Initial database name 填 `github_account_info`**（不填的话实例里没有业务库，还得手动建）；关掉 Automated backups / Performance Insights / Enhanced monitoring 省成本
+
+创建完等实例 Available，拿到 endpoint（`github-account-info-db.xxx.us-east-2.rds.amazonaws.com`）。表结构 migration 是后来打通 SSM 隧道后用 `pnpm db:migrate` 执行的。
+
+#### 步骤 4：写 SAM template.yaml
+
+`apps/server/template.yaml` 把"Lambda + API Gateway + VPC 挂载 + 环境变量"全部声明出来。完整内容加注释：
+
+```yaml
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+# ↑ Transform 声明这是 SAM 模板：部署时 SAM 的简写语法（Serverless::Function 等）
+#   会被展开成完整的 CloudFormation 资源（Lambda + IAM Role + API Gateway + 路由 + 权限）
+
+Globals:              # 所有 Serverless Function 共享的默认配置
+  Function:
+    Timeout: 30       # 单次调用最长 30s（API Gateway 集成的上限也是 30s）
+    MemorySize: 256   # 256MB；Lambda CPU 随内存等比分配
+    Runtime: nodejs22.x
+    Architectures:
+      - x86_64
+    VpcConfig:        # ★ 关键：把 Lambda 挂进 VPC，才能内网连 RDS
+      SubnetIds:
+        - subnet-0271ef8002e00346a    # private-subnet-lambda（10.0.2.0/24）
+      SecurityGroupIds:
+        - sg-0f1137c6844a4c9fb        # lambda-sg（rds-sg 的入站规则引用了它）
+
+Parameters:           # 部署时通过 --parameter-overrides 传入，不写死在模板里
+  DatabaseUrl:
+    Type: String
+    NoEcho: true      # ★ 防泄露：CloudFormation 控制台/事件日志里显示为 ****
+  CorsOrigin:
+    Type: String      # 明文参数（值是公开的前端域名，无需 NoEcho）
+
+Resources:
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: github-account-info-api
+      Handler: lambda.handler   # dist/lambda.mjs 里导出的 handler（hono/aws-lambda 的 handle(app)）
+      CodeUri: dist/            # 部署包目录 = esbuild 的打包产物
+      Description: GitHub Account Info API
+      Environment:
+        Variables:              # ★ Lambda 环境变量在这里注入（这就是"云上不读 .env"的答案）
+          DATABASE_URL: !Ref DatabaseUrl
+          CORS_ORIGIN: !Ref CorsOrigin
+      Events:                   # 声明触发器：SAM 会自动创建 HttpApi、路由和调用权限
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /{proxy+}     # 除根路径外的所有请求全量代理给 Hono
+            Method: ANY
+        RootEvent:
+          Type: HttpApi
+          Properties:
+            Path: /             # 根路径（健康检查 GET / 返回 OK）
+            Method: ANY
+
+Outputs:
+  ApiUrl:             # 部署完输出 API Gateway 地址 → 填给 Cloudflare 的 VITE_SERVER_URL
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+    # ServerlessHttpApi 是 SAM 用 HttpApi 事件时隐式创建的 API Gateway 的逻辑 ID
+```
+
+配套的 `apps/server/samconfig.toml`（`sam deploy` 的默认参数，免得每次敲一长串命令行）：
+
+```toml
+version = 0.1
+
+[default.deploy.parameters]       # default 环境的 deploy 命令默认参数
+stack_name = "github-account-info"  # CloudFormation 栈名，之后每次部署都更新这个栈
+resolve_s3 = true                   # 自动创建/复用 SAM 管理的 S3 桶（部署包先传 S3 再给 Lambda）
+s3_prefix = "github-account-info"   # 部署包在桶内的路径前缀
+region = "us-east-2"
+confirm_changeset = true            # 本地部署前人工确认变更集；CI 里用 --no-confirm-changeset 覆盖
+capabilities = "CAPABILITY_IAM"     # 授权 CloudFormation 创建 IAM 资源（Lambda 执行角色需要）
+disable_rollback = true             # 部署失败不自动回滚，保留现场方便排查（学习期设置，生产建议关）
+parameter_overrides = "CorsOrigin=\"*\""  # 兜底默认值，实际总是被命令行 --parameter-overrides 覆盖
+```
+
+一次 `sam deploy` 背后发生的事：打包 `dist/` 上传 S3 → 基于模板 diff 生成 **changeset**（变更集）→ 执行 changeset 更新栈。第 11 节的 OBSOLETE 问题就出在两个 changeset 并发执行上。
+
+#### 步骤 5：sam deploy 部署 Lambda
+
+首次部署是本地手动执行的，为了不在命令行里明文敲连接串，写了 `deploy.mjs`：读取 `apps/server/.env` 里的生产值，拼出 `sam deploy --parameter-overrides DatabaseUrl=... CorsOrigin=...` 执行（这就是 1.5 节链路 C 的由来，也解释了为什么 `.env` 里放的是生产值）。部署成功后从 Outputs 拿到 `https://mdgq1tigyl.execute-api.us-east-2.amazonaws.com`。
+
+#### 步骤 6：配 Cloudflare Pages
+
+Dashboard 上完成 Git 集成：连接 GitHub 仓库 → 构建命令 `pnpm --filter web build` → 输出目录 `apps/web/dist` → 环境变量 `VITE_SERVER_URL` 填步骤 5 拿到的 API Gateway 地址 → 首次部署得到 `github-account-info.pages.dev`。至此六步计划走完，线上全链路打通。
+
+### 2.4 计划之外追加的三件事
+
+计划只覆盖了"部署上线"，实际跑起来后又补了三块，都是被真实需求逼出来的：
+
+1. **GitHub Actions 自动部署**（第 4 节）——每次改后端都要本地手动 `deploy.mjs` 太麻烦，于是配了 OIDC 免密钥的 `deploy.yml`，push 即部署，`paths` 过滤只在后端相关包变化时触发
+2. **跳板 EC2 + SSM 隧道**（第 5 节）——RDS 在私有子网，本地根本连不上，没法开发调试；加了跳板机和 `pnpm db:tunnel` 端口转发，后来又把跳板机安全组的入站规则清空，做到真正零入站
+3. **本地 env 分层**（第 6、7 节）——`.env` 被 `deploy.mjs` 占用放生产值，本地开发需要另一套配置，于是引入 `.env.local` + `--env-file` 双文件加载；这一步连环踩了 ESM import 提升和 last-wins 两个坑
+
+### 2.5 回头看这份计划
+
+- **顺序判断是对的**：先代码后基础设施，六步基本没有返工
+- **低估最严重的是本地开发路径**：计划里根本没有"本地怎么连私有 RDS"这一项，而实际上隧道、env 分层、SSL 三件事花掉的排查时间比部署本身还多——上云方案要把"部署后怎么继续开发"当成一等公民来规划
+- **"你来操作、我来指导"的分工有效**：控制台操作留给人（有页面上下文、能看到实时状态），代码与配置文件交给 AI（可验证、可回滚）
+
+---
+
+## 3. AWS Lambda 部署：环境变量不走 .env
+
+**坑**：本地习惯了 `.env` 文件，以为部署到 Lambda 后也会自动读取。**不会**。`.env` 文件根本不会被打包上传（也不应该上传，里面是密钥）。
+
+Lambda 的环境变量注入链路是一条完整的传递链：
+
+```
+GitHub Secrets (AWS_DATABASE_URL)
+    │  ${{ secrets.AWS_DATABASE_URL }}
+    ▼
+GitHub Actions workflow (deploy.yml)
+    │  sam deploy --parameter-overrides DatabaseUrl="..."
+    ▼
+CloudFormation Parameters (template.yaml, NoEcho: true)
+    │  !Ref DatabaseUrl
+    ▼
+Lambda Environment Variables (DATABASE_URL)
+    │  process.env.DATABASE_URL
+    ▼
+应用代码 (@github-account-info/env 的 createEnv 校验后使用)
+```
+
+关键配置点：
+
+- `template.yaml` 中参数声明 `NoEcho: true`，防止连接串出现在 CloudFormation 控制台/事件日志里。
+- GitHub Secrets 存储在仓库 **Settings → Secrets and variables → Actions**，即使仓库公开也不会泄露；workflow 日志中会自动打码。
+- 本地的 `apps/server/.env` 只作为 `deploy.mjs` 手动部署时的参数来源，与线上运行时无关。
+
+**心智模型**：`.env` 是"开发机的便利"，云上环境变量是"平台的配置"。两者从来不是同一个东西，部署 = 显式地把配置搬运过去。
+
+---
+
+## 4. GitHub Actions + OIDC：免密钥部署 AWS
+
+传统做法是把 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` 存进 GitHub Secrets——长期有效的密钥一旦泄露风险很大。本项目用的是 **OIDC（OpenID Connect）短期凭证**。`.github/workflows/deploy.yml` 全文加注释：
+
+```yaml
+name: Deploy Lambda
+
+on:
+  push:
+    branches: [master]        # 只有 master 分支的 push 才触发
+    paths:                    # ★ 路径过滤：只有后端相关包变化才部署，前端提交不跑 SAM
+      - "apps/server/**"
+      - "packages/api/**"
+      - "packages/db/**"
+      - "packages/env/**"
+  workflow_dispatch:          # 允许在 GitHub 页面手动触发（救急时不用推空提交）
+
+permissions:
+  id-token: write             # ★ OIDC 核心：允许 GitHub 为这次运行签发身份 token
+  contents: read              # 只读代码即可，最小权限
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4          # ① 拉代码
+
+      - uses: pnpm/action-setup@v4          # ② 装 pnpm（版本与本地锁定一致）
+        with:
+          version: 10.24.0
+
+      - uses: actions/setup-node@v4         # ③ 装 Node 22 并启用 pnpm store 缓存
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies          # ④ 装依赖；--frozen-lockfile 保证与 lockfile 完全一致
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Lambda                  # ⑤ esbuild 打包 → apps/server/dist/lambda.mjs
+        run: node build.mjs
+        working-directory: apps/server
+
+      - name: Configure AWS credentials     # ⑥ ★ OIDC 换取短期 AWS 凭证，全程无长期密钥
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::879980498268:role/github-actions-deployer
+          aws-region: us-east-2
+
+      - uses: aws-actions/setup-sam@v2      # ⑦ 装 SAM CLI
+
+      - name: Deploy Lambda                 # ⑧ 部署；参数覆盖 samconfig.toml 的默认值
+        run: |
+          sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              DatabaseUrl="${{ secrets.AWS_DATABASE_URL }}" \
+              CorsOrigin="https://github-account-info.pages.dev"
+        working-directory: apps/server
+        # --no-confirm-changeset：CI 无人值守，跳过人工确认（本地 samconfig 里是 true）
+        # --no-fail-on-empty-changeset：代码无变化时不报错退出（否则重跑会红）
+        # DatabaseUrl 从 GitHub Secrets 注入，日志中自动打码
+        # CorsOrigin 是公开的前端域名，直接明文写在 workflow 里
+```
+
+**OIDC 原理**：GitHub 为每次 workflow 运行签发一个短期 OIDC token，AWS IAM 侧配置了信任 GitHub 的身份提供商（IdP），并限定只有本仓库的 workflow 才能扮演 `github-actions-deployer` 这个角色。**没有任何长期密钥存在于 GitHub**，凭证随任务结束自动失效。
+
+> SAM 相关配置一共三份，各管一段：`template.yaml`（声明云上资源，见 [2.3 步骤 4](#步骤-4写-sam-templateyaml)）→ `samconfig.toml`（sam deploy 的默认参数）→ `deploy.yml`（CI 里何时、以什么身份、用什么参数执行 sam deploy）。
+
+---
+
+## 5. 本地开发连私有子网 RDS：SSM 隧道
+
+**背景**：RDS 放在 VPC 私有子网（安全最佳实践，不暴露公网），只有同 VPC 内的 Lambda 能直连。那本地开发怎么连数据库？
+
+**方案**：AWS SSM Session Manager 端口转发，借助 VPC 内一台 EC2 做跳板，且**不需要给 EC2 开任何入站端口**（比传统 SSH 跳板机更安全，走的是 SSM Agent 的出站长连接）。
+
+```bash
+aws ssm start-session \
+  --target i-0fe5bdd02a913b64a \          # VPC 内的跳板 EC2 实例 ID
+  --region us-east-2 \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters '{
+    "host": ["github-account-info-db.xxx.us-east-2.rds.amazonaws.com"],
+    "portNumber": ["5432"],
+    "localPortNumber": ["5433"]
+  }'
+```
+
+效果：`localhost:5433` → （SSM 加密通道）→ EC2 → RDS:5432。本地 `DATABASE_URL` 指向 `localhost:5433` 即可。
+
+已沉淀为根目录 npm 脚本：`pnpm db:tunnel`。
+
+**注意**：
+- 隧道是前台进程，开发期间要保持这个终端窗口不关。
+- 本地连接用的端口（5433）故意与默认 5432 错开，避免与本机 PostgreSQL 冲突。
+
+---
+
+## 6. ESM import 提升：dotenv 为什么失效
+
+**坑**：在 `src/index.ts` 顶部写了 `import "dotenv/config"`（甚至手动 `config({ path: ".env.local" })`），但 `@github-account-info/env` 的 `createEnv()` 校验仍然报 `Invalid environment variables`。
+
+**根因**：ESM 的静态 `import` 有**提升（hoisting）**语义——所有 import 的模块会在当前模块任何代码执行之前**先被解析和执行**。也就是说：
+
+```ts
+import "dotenv/config";                              // 你以为它先执行
+import { env } from "@github-account-info/env/server"; // 实际上这一行的模块图先被完整执行
+```
+
+`@github-account-info/env/server` 内部的 `createEnv()` 在模块加载时立即读取 `process.env` 并校验——此时 dotenv 还没跑，环境变量是空的，直接抛错。**import 语句的书写顺序不等于执行顺序**（同层 import 之间按顺序，但依赖树深处的代码先于当前文件的任何语句）。
+
+**解法**：不在代码里加载 .env，改用 Node.js 原生 `--env-file` 标志，让环境变量在**进程启动时、任何模块加载前**就绪：
+
+```json
+"dev": "tsx watch --env-file=.env --env-file=.env.local src/index.ts"
+```
+
+**教训**：凡是"必须在所有模块加载前完成"的初始化（环境变量、全局 polyfill），都不要依赖模块内的副作用 import，用进程级机制（CLI flag、启动器）。
+
+---
+
+## 7. Node.js --env-file：last-wins 语义
+
+**坑**：配置成 `--env-file=.env.local --env-file=.env`，以为"先写的优先"，结果本地开发连上了**生产 RDS**（后写的 `.env` 里是生产连接串）。
+
+**事实**：Node.js 的 `--env-file` 是 **last-wins（后者覆盖前者）**，与 dotenv 库的默认行为（first-wins，已存在的变量不覆盖）**正好相反**。
+
+正确写法（本地覆盖文件放最后）：
+
+```json
+"dev": "tsx watch --env-file=.env --env-file=.env.local src/index.ts"
+```
+
+文件分层约定：
+
+| 文件 | 内容 | 是否提交 |
+| --- | --- | --- |
+| `apps/server/.env` | 生产值（deploy.mjs 手动部署时读取） | ❌ gitignore |
+| `apps/server/.env.local` | 本地开发覆盖（localhost:5433 隧道、本地 CORS） | ❌ gitignore |
+
+**教训**：涉及"多来源配置合并"时，第一件事是确认优先级方向，别靠猜。验证方式很简单——启动时临时 `console.log` 打印关键变量（调试完删掉）。这次就是靠打印 `DATABASE_URL` 才发现连的是生产库。
+
+---
+
+## 8. pg 8.22 的 SSL 大坑：sslmode=require 语义变了
+
+这是本次部署过程中最绕的一个坑，三个知识点叠加：
+
+### 8.1 pg@8.22.0 起 `sslmode=require` = 完整证书校验
+
+老版本的 `pg` 中 `sslmode=require` 只要求加密、不校验证书。**pg 8.22 改为等同 `verify-full`**（对齐 libpq 语义）。RDS 默认证书链本地没有装 CA，于是报：
+
+```
+SELF_SIGNED_CERT_IN_CHAIN
+```
+
+### 8.2 连接串里的 sslmode 会覆盖 Pool 的 ssl 选项
+
+第一次尝试修复：在 `new Pool({ ssl: { rejectUnauthorized: false } })` 里关掉校验——**没用**。因为 `DATABASE_URL` 里还挂着 `?sslmode=require`，连接串参数的优先级高于 Pool 选项，仍然走完整校验。
+
+### 8.3 RDS 强制 SSL，不能干脆禁用
+
+第二次尝试：`sslmode=disable`——也不行，RDS 参数组默认 `rejectUnauthorized`/强制 SSL，明文连接直接被拒。
+
+### 8.4 最终解法
+
+**URL 里彻底去掉 sslmode 参数**，SSL 行为完全交给 Pool 选项控制：
+
+```ts
+// packages/db/src/index.ts
+export function createDb() {
+	const pool = new Pool({
+		connectionString: env.DATABASE_URL,   // URL 中不带 sslmode
+		ssl: { rejectUnauthorized: false },   // 加密但不校验证书
+	});
+	return drizzle(pool, { schema });
+}
+```
+
+```
+# DATABASE_URL 格式（本地和生产一致，无 sslmode 后缀）
+postgresql://user:pass@host:5432/dbname
+```
+
+这一份配置同时适配两个场景：本地（经 SSM 隧道，证书 CN 对不上 localhost）和生产（Lambda 在 VPC 内直连 RDS）。
+
+> 更严格的做法是下载 AWS RDS 全球证书包（`global-bundle.pem`）配 `ssl: { ca: ... }` 做完整校验；当前项目在 VPC 内网通信，接受 `rejectUnauthorized: false` 的折中。
+
+**教训**：依赖升级的 breaking change 可能藏在"行为语义"里而不是 API 签名里，编译不报错、运行才炸。排查连接类问题时，要意识到**连接串参数、驱动选项、服务端强制策略**三层可能互相覆盖。
+
+---
+
+## 9. 浏览器报 CORS 错误 ≠ 真的是 CORS 问题
+
+**坑**：前端控制台一片红的 "blocked by CORS policy"，第一反应是去改服务端 CORS 配置——改了没用，因为**根因根本不是 CORS**。
+
+**真相链**：
+
+1. `account.list` 因数据库连不上返回 **500**；
+2. 另一个请求打到了不支持该 HTTP 方法的端点，返回 **405 METHOD_NOT_SUPPORTED**；
+3. 错误响应（500/405）没带 `Access-Control-Allow-Origin` 头；
+4. 浏览器看到"跨域响应缺 CORS 头"，一律报成 CORS 错误，**掩盖了真实的状态码**。
+
+**排查方法论**：
+
+- 别只看 Console，去 **Network 面板看真实的 HTTP 状态码和响应体**。OPTIONS 预检返回 204 说明 CORS 配置本身是通的。
+- 服务端日志（`hono/logger`）里能直接看到 `500`、`405`，比浏览器的报错可信得多。
+- 顺序：先修服务端真实错误（本例是 DB 连接），CORS "错误"自然消失。
+
+**附带坑：CORS_ORIGIN 端口对不上**。配置写了 `http://localhost:5173`，但 Vite 因 5173 被占用实际跑在 3001。CORS 的 origin 匹配是**全字符串精确匹配**（协议+域名+端口），差一个端口就拦。本项目后来在 `vite.config.ts` 固定了 `server.port: 3001`，与 `.env.local` 的 `CORS_ORIGIN=http://localhost:3001` 对齐。
+
+**顺带学到的 tRPC 知识**：`.query()` 走 GET，`.mutation()` 走 POST。所以 CORS 的 `allowMethods` 至少要开 `GET, POST, OPTIONS`；也因此"为什么进详情页会发 GET 的 list 请求"——因为 query 是 GET。
+
+---
+
+## 10. Cloudflare Pages 自动部署的坑
+
+### 10.1 连续快速 push 会取消前一次构建
+
+两个 commit 紧挨着 push，Cloudflare 会取消第一个的构建去构建第二个；如果时机不巧，会出现 "No deployment available"。**解法**：去 Dashboard 手动 Retry deployment，或者攒好改动一次 push。
+
+### 10.2 monorepo 下 Build Watch Paths 不可靠（重点坑）
+
+配置了构建监视路径 `apps/web/**`、`packages/ui/**`、`packages/env/**`，理论上改这些路径才触发构建。实际表现：**明明提交里包含 `apps/web/src/routes/index.tsx`，构建状态还是 skipped**，且连续多次如此——Cloudflare 的 glob 匹配对 monorepo 子路径存在误判。
+
+**解法**：直接清空 Watch Paths。代价评估：本项目 Pages 的构建命令是 `pnpm --filter web build`，只构建前端，后端提交多触发一次前端构建毫无副作用，就多花几十秒构建时长。**可靠性 > 省几次构建**。
+
+### 10.3 部署单位是"分支最新代码"，不是"逐个提交"
+
+被 skip 掉的提交不会丢：下一次成功触发的构建拉的是 master 最新代码，之前所有未部署的改动一并带上。所以"补部署"的最简单方式是推一个空提交：
+
+```bash
+git commit --allow-empty -m "chore(repo): 测试 Cloudflare Pages 自动部署"
+git push
+```
+
+---
+
+## 11. CloudFormation 并发部署：OBSOLETE changeset
+
+**坑**：两个 commit 快速连推，触发两个并行的 GitHub Actions 部署任务。第一个的 CloudFormation changeset 还在执行，第二个创建的 changeset 直接变成 **OBSOLETE**，任务失败。
+
+**解法**：
+- 临时：去 Actions 页面 re-run 失败的 job。
+- 预防：`sam deploy` 加上 `--no-fail-on-empty-changeset`（本项目已加），避免"没有变化"这种情况报错；对并发问题，可以给 workflow 配 `concurrency` 组让部署排队（可选优化）。
+
+**教训**：CI/CD 流水线普遍不擅长处理"同一目标的并发部署"，GitHub Actions（CloudFormation）和 Cloudflare Pages 都在快速连推时出过问题。养成习惯：**相关改动攒成一次 push**。
+
+---
+
+## 12. 前端 TanStack Query 交互经验
+
+### 12.1 删除交互的"中间态"bug
+
+**现象**：点删除按钮 → 按钮先消失 → 卡片愣了一会才消失。
+
+**根因**：删除逻辑分两步——同步清 localStorage（立即生效，导致 `hasLocalToken` 变 false、按钮消失）+ 异步调删除接口（成功后 invalidate 重新拉列表，卡片才消失）。两步之间卡片处于"只读展示"的中间态。
+
+**解法**：乐观更新（optimistic update）——点击时先用 `setQueryData` 手改缓存让卡片立即消失，接口结果用 `onSettled` 统一 invalidate 兜底（成功=确认，失败=数据回来）：
+
+```ts
+queryClient.setQueryData(
+	trpc.account.list.queryOptions().queryKey,
+	(old) => old?.filter((r) => r.id !== card.dbId) ?? [],
+);
+deleteMut.mutate(
+	{ id: card.dbId },
+	{ onSettled: () => queryClient.invalidateQueries(trpc.account.list.queryFilter()) },
+);
+```
+
+要点：用 `onSettled` 而不是 `onSuccess`——失败时也要 refetch，把误删的缓存恢复回来。
+
+### 12.2 refetchOnWindowFocus
+
+TanStack Query 默认在窗口重新聚焦时自动 refetch 所有活跃查询（stale-while-revalidate 策略）。开发时来回切窗口会看到大量"莫名"的请求。本项目在 QueryClient 全局关掉：
+
+```ts
+defaultOptions: { queries: { refetchOnWindowFocus: false } }
+```
+
+### 12.3 隐式的自动同步会破坏用户心智模型
+
+**案例**：添加 token 时代码自动 upsert 到数据库，导致用户"明明删了卡片、重新添加后详情页却显示数据来源是数据库"——用户以为删除没生效。实际上删除完全正常，是**添加时的隐式写库**让数据又回去了。
+
+**教训**：涉及"数据写到哪"的操作要显式、可预期。改为：添加 token 只写 localStorage，只有用户在详情页主动点"保存到数据库"才写库。**自动化的副作用如果用户感知不到，就会变成"灵异现象"**。
+
+---
+
+## 13. 错误速查表
+
+| 报错/现象 | 真实原因 | 解法 |
+| --- | --- | --- |
+| `Invalid environment variables`（启动即抛） | ESM import 提升，createEnv 先于 dotenv 执行 | 用 `--env-file` 启动标志，弃用代码内 dotenv |
+| 本地开发连上了生产库 | `--env-file` 是 last-wins，覆盖文件放错顺序 | `.env.local` 放最后；打印关键变量验证 |
+| `SELF_SIGNED_CERT_IN_CHAIN` | pg≥8.22 把 `sslmode=require` 当 verify-full | URL 去掉 sslmode，Pool 配 `ssl: { rejectUnauthorized: false }` |
+| Pool 配了 ssl 仍报证书错误 | 连接串里的 `sslmode` 参数优先级更高 | 从 DATABASE_URL 中删掉 sslmode |
+| `sslmode=disable` 被拒连 | RDS 强制 SSL | 不能禁用，走上一条方案 |
+| 浏览器报 CORS，服务端 CORS 没错 | 500/405 错误响应不带 CORS 头，浏览器误报 | 看 Network 状态码 + 服务端日志，修真实错误 |
+| CORS 精确配置了还是拦 | origin 端口不匹配（5173 vs 3001） | 固定 Vite 端口，与 CORS_ORIGIN 对齐 |
+| GitHub Actions changeset OBSOLETE | 并发部署，前一个 changeset 还在执行 | re-run；避免连推；可配 concurrency |
+| SAM 部署"无变化"报错 | changeset 为空默认失败 | `--no-fail-on-empty-changeset` |
+| Cloudflare Pages 一直 skipped | monorepo watch paths glob 误判 | 清空 watch paths，全量触发 |
+| Cloudflare "No deployment available" | 连推导致前一构建被取消 | 手动 Retry deployment |
+| 删除按钮先消失、卡片后消失 | 同步状态与异步请求之间的中间态 | setQueryData 乐观更新 + onSettled invalidate |
+| 删了数据又"自己回来了" | 添加流程里的隐式自动写库 | 去掉隐式副作用，写库改为显式操作 |
+
+---
+
+## 14. 通用方法论沉淀
+
+1. **配置合并先问优先级**。多份 .env、URL 参数 vs 驱动选项、CLI flag vs 代码默认值——凡是同一配置有多个来源，第一件事搞清楚谁覆盖谁，而不是靠直觉。
+
+2. **浏览器的错误信息是"翻译过的"，服务端日志才是原文**。CORS、Failed to fetch 这类报错经常是别的错误（500/405/网络不通）的投影。排查顺序：服务端日志 → Network 面板状态码 → 最后才怀疑浏览器端配置。
+
+3. **怀疑环境变量时，直接打印出来看**。加两行临时 `console.log`（调试完删除）比反复读配置文件推理快得多——本次两个关键突破（连错库、端口不对）都是打印出来才定位的。
+
+4. **依赖升级要看 changelog 的行为变更**，尤其是数据库驱动、加密/TLS 相关的库。API 没变不代表语义没变（pg 8.22 的 sslmode）。
+
+5. **CI/CD 不擅长并发，攒好改动一次 push**。两个平台（GitHub Actions、Cloudflare Pages）都在"快速连推"场景下翻车。
+
+6. **自动化要么完全可靠，要么显式可见**。Watch paths 这种"帮你省构建"的优化一旦不可靠，排查成本远超省下的构建时间——果断删掉。同理，前端自动写库这种用户无感知的副作用会制造"灵异 bug"。
+
+7. **本地与生产的差异点要有清单意识**：数据库入口（隧道 vs VPC 直连）、SSL 证书校验、CORS origin、环境变量注入方式——每一项都是一个潜在坑位，新项目部署时可对照自查。
+
+8. **密钥的正确旅程**：本地 .env（gitignore）→ GitHub Secrets → CI 注入 → 云平台环境变量。任何一步都不落盘到代码仓库；CloudFormation 参数记得 `NoEcho: true`。

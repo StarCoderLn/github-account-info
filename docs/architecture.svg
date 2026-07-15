@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1720 1150" font-family="'PingFang SC','Hiragino Sans GB','Helvetica Neue',Arial,sans-serif">
+	<defs>
+		<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+			<path d="M 0 0 L 10 5 L 0 10 z" fill="#555"/>
+		</marker>
+		<marker id="arrow-dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+			<path d="M 0 0 L 10 5 L 0 10 z" fill="#999"/>
+		</marker>
+		<marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+			<path d="M 0 0 L 10 5 L 0 10 z" fill="#0284c7"/>
+		</marker>
+	</defs>
+
+	<rect x="0" y="0" width="1720" height="1150" fill="#ffffff"/>
+
+	<!-- 标题 -->
+	<text x="40" y="52" font-size="22" font-weight="700" fill="#111">github-account-info 整体架构</text>
+	<text x="40" y="78" font-size="13" fill="#666">前端 Cloudflare Pages · 后端 AWS Lambda（SAM）</text>
+	<text x="40" y="100" font-size="13" fill="#666">数据库 RDS PostgreSQL（私有子网）· Turborepo + pnpm monorepo</text>
+
+	<!-- 图例 -->
+	<line x1="1130" y1="44" x2="1175" y2="44" stroke="#555" stroke-width="1.8"/>
+	<text x="1183" y="48" font-size="12.5" fill="#555">运行时请求</text>
+	<line x1="1130" y1="68" x2="1175" y2="68" stroke="#999" stroke-width="1.8" stroke-dasharray="6 4"/>
+	<text x="1183" y="72" font-size="12.5" fill="#555">构建 / 开发链路</text>
+
+	<!-- 用户浏览器 -->
+	<rect x="610" y="40" width="300" height="60" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.5"/>
+	<text x="760" y="77" font-size="16" font-weight="700" fill="#334155" text-anchor="middle">用户浏览器</text>
+
+	<!-- Cloudflare Pages -->
+	<rect x="60" y="220" width="480" height="240" rx="12" fill="#fffdf9" stroke="#f6821f" stroke-width="1.8"/>
+	<text x="300" y="252" font-size="16" font-weight="700" fill="#c2570b" text-anchor="middle">Cloudflare Pages（全球 CDN）</text>
+	<text x="300" y="276" font-size="13" fill="#666" text-anchor="middle" font-family="Menlo,monospace">github-account-info.pages.dev</text>
+	<line x1="84" y1="292" x2="516" y2="292" stroke="#f3e8d8" stroke-width="1"/>
+	<text x="90" y="318" font-size="13" fill="#444">· apps/web 构建产物（纯静态 SPA，无源站）</text>
+	<text x="90" y="342" font-size="13" fill="#444">· React + Vite + TanStack Router / Query</text>
+	<text x="90" y="366" font-size="13" fill="#444">· tRPC client（AppRouter 类型端到端推导）</text>
+	<text x="90" y="390" font-size="13" fill="#444">· 构建时注入 VITE_SERVER_URL → 指向 API Gateway</text>
+	<text x="90" y="414" font-size="13" fill="#444">· 构建命令 pnpm --filter web build → apps/web/dist</text>
+
+	<!-- GitHub API（外部服务） -->
+	<rect x="1500" y="280" width="200" height="120" rx="10" fill="#ffffff" stroke="#24292f" stroke-width="1.5"/>
+	<text x="1600" y="316" font-size="15" font-weight="700" fill="#24292f" text-anchor="middle">GitHub API</text>
+	<text x="1600" y="342" font-size="12.5" fill="#666" text-anchor="middle" font-family="Menlo,monospace">api.github.com</text>
+	<text x="1600" y="368" font-size="12" fill="#666" text-anchor="middle">Bearer PAT 调用</text>
+
+	<!-- AWS 区域 -->
+	<rect x="620" y="180" width="860" height="790" rx="12" fill="#fcfcfd" stroke="#232f3e" stroke-width="1.8"/>
+	<text x="644" y="210" font-size="15" font-weight="700" fill="#232f3e">AWS us-east-2（俄亥俄）</text>
+
+	<!-- API Gateway -->
+	<rect x="760" y="230" width="320" height="84" rx="10" fill="#ffffff" stroke="#d6336c" stroke-width="1.5"/>
+	<text x="920" y="262" font-size="15" font-weight="700" fill="#a61e4d" text-anchor="middle">API Gateway（HttpApi）</text>
+	<text x="920" y="288" font-size="13" fill="#666" text-anchor="middle" font-family="Menlo,monospace">ANY /{proxy+} · ANY /</text>
+
+	<!-- VPC -->
+	<rect x="660" y="360" width="790" height="580" rx="12" fill="#f6fbf4" stroke="#1d8102" stroke-width="1.5" stroke-dasharray="8 5"/>
+	<text x="684" y="388" font-size="14" font-weight="700" fill="#1d8102">VPC（10.0.0.0/16）</text>
+
+	<!-- 私有子网 A：Lambda -->
+	<rect x="690" y="400" width="360" height="240" rx="10" fill="#ffffff" stroke="#ed7100" stroke-width="1.2" stroke-dasharray="4 3"/>
+	<text x="710" y="424" font-size="12" font-weight="700" fill="#c2570b">私有子网 A：Lambda（10.0.2.0/24 · us-east-2a）</text>
+	<rect x="710" y="445" width="320" height="170" rx="10" fill="#ffffff" stroke="#ed7100" stroke-width="1.5"/>
+	<text x="870" y="475" font-size="14.5" font-weight="700" fill="#c2570b" text-anchor="middle">Lambda：github-account-info-api</text>
+	<text x="870" y="498" font-size="12" fill="#666" text-anchor="middle">nodejs22.x · 256 MB · 30s 超时</text>
+	<line x1="734" y1="512" x2="1006" y2="512" stroke="#f3e8d8" stroke-width="1"/>
+	<text x="870" y="536" font-size="12" fill="#444" text-anchor="middle">Hono + tRPC（handler: lambda.handler）</text>
+	<text x="870" y="560" font-size="12" fill="#444" text-anchor="middle">esbuild 打包单文件 dist/lambda.mjs</text>
+	<text x="870" y="584" font-size="12" fill="#444" text-anchor="middle">env：DATABASE_URL · CORS_ORIGIN</text>
+
+	<!-- 私有子网 B：RDS -->
+	<rect x="1080" y="400" width="340" height="240" rx="10" fill="#ffffff" stroke="#2e73b8" stroke-width="1.2" stroke-dasharray="4 3"/>
+	<text x="1100" y="424" font-size="12" font-weight="700" fill="#1e5a96">私有子网 B：RDS（10.0.3.0/24 · us-east-2b）</text>
+	<rect x="1100" y="445" width="300" height="170" rx="10" fill="#ffffff" stroke="#2e73b8" stroke-width="1.5"/>
+	<text x="1250" y="475" font-size="14.5" font-weight="700" fill="#1e5a96" text-anchor="middle">RDS PostgreSQL</text>
+	<text x="1250" y="498" font-size="12" fill="#666" text-anchor="middle" font-family="Menlo,monospace">github-account-info-db</text>
+	<line x1="1124" y1="512" x2="1376" y2="512" stroke="#dbe7f3" stroke-width="1"/>
+	<text x="1250" y="536" font-size="12" fill="#444" text-anchor="middle">库：github_account_info · 无公网入口</text>
+	<text x="1250" y="560" font-size="12" fill="#444" text-anchor="middle">安全组仅放行 Lambda SG</text>
+	<text x="1250" y="584" font-size="12" fill="#444" text-anchor="middle">与跳板机 SG 的 :5432</text>
+
+	<!-- 公有子网 -->
+	<rect x="690" y="680" width="730" height="220" rx="10" fill="#ffffff" stroke="#0f766e" stroke-width="1.2" stroke-dasharray="4 3"/>
+	<text x="710" y="704" font-size="12" font-weight="700" fill="#0f766e">公有子网：出站网关子网（路由 0.0.0.0/0 → IGW）</text>
+
+	<rect x="720" y="730" width="210" height="110" rx="10" fill="#ffffff" stroke="#0f766e" stroke-width="1.5"/>
+	<text x="825" y="772" font-size="14" font-weight="700" fill="#0f766e" text-anchor="middle">NAT Gateway</text>
+	<text x="825" y="796" font-size="12" fill="#666" text-anchor="middle">私有子网统一出站</text>
+
+	<rect x="965" y="730" width="180" height="110" rx="10" fill="#ffffff" stroke="#0f766e" stroke-width="1.5"/>
+	<text x="1055" y="772" font-size="13.5" font-weight="700" fill="#0f766e" text-anchor="middle">Internet Gateway</text>
+	<text x="1055" y="796" font-size="12" fill="#666" text-anchor="middle">IGW · 连接公网</text>
+
+	<rect x="1180" y="730" width="220" height="110" rx="10" fill="#ffffff" stroke="#737373" stroke-width="1.5"/>
+	<text x="1290" y="764" font-size="13" font-weight="700" fill="#404040" text-anchor="middle">跳板 EC2（零入站）</text>
+	<text x="1290" y="786" font-size="11.5" fill="#666" text-anchor="middle">SSM Agent 出站 443</text>
+	<text x="1290" y="808" font-size="10.5" fill="#999" text-anchor="middle" font-family="Menlo,monospace">i-0fe5bdd02a913b64a</text>
+
+	<!-- 开发机 -->
+	<rect x="60" y="620" width="320" height="130" rx="12" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1.5"/>
+	<text x="220" y="650" font-size="15" font-weight="700" fill="#0369a1" text-anchor="middle">开发机（本地）</text>
+	<text x="220" y="676" font-size="12.5" fill="#444" text-anchor="middle">pnpm db:tunnel（SSM 端口转发）</text>
+	<text x="220" y="700" font-size="12.5" fill="#444" text-anchor="middle" font-family="Menlo,monospace">localhost:5433 → RDS:5432</text>
+	<text x="220" y="724" font-size="12.5" fill="#444" text-anchor="middle">dev:server :3000 · dev:web :3001</text>
+
+	<!-- GitHub 仓库 -->
+	<rect x="500" y="1010" width="300" height="100" rx="10" fill="#ffffff" stroke="#24292f" stroke-width="1.5"/>
+	<text x="650" y="1040" font-size="15" font-weight="700" fill="#24292f" text-anchor="middle">GitHub 仓库</text>
+	<text x="650" y="1064" font-size="12.5" fill="#666" text-anchor="middle" font-family="Menlo,monospace">StarCoderLn/github-account-info</text>
+	<text x="650" y="1088" font-size="12.5" fill="#666" text-anchor="middle">master 分支 · Secrets 存敏感配置</text>
+
+	<!-- GitHub Actions -->
+	<rect x="950" y="1010" width="340" height="100" rx="10" fill="#ffffff" stroke="#2088ff" stroke-width="1.5"/>
+	<text x="1120" y="1040" font-size="15" font-weight="700" fill="#0958d9" text-anchor="middle">GitHub Actions（deploy.yml）</text>
+	<text x="1120" y="1064" font-size="12.5" fill="#666" text-anchor="middle">OIDC 短期凭证 → sam deploy</text>
+	<text x="1120" y="1088" font-size="12.5" fill="#666" text-anchor="middle">paths 过滤：server / api / db / env</text>
+
+	<!-- 运行时箭头 -->
+	<line x1="660" y1="100" x2="335" y2="217" stroke="#555" stroke-width="1.8" marker-end="url(#arrow)"/>
+	<text x="440" y="146" font-size="13" fill="#555" text-anchor="middle">① 加载静态资源</text>
+
+	<line x1="835" y1="100" x2="908" y2="227" stroke="#555" stroke-width="1.8" marker-end="url(#arrow)"/>
+	<text x="905" y="158" font-size="13" fill="#555">② tRPC over HTTP（/trpc/*）</text>
+
+	<line x1="912" y1="314" x2="878" y2="442" stroke="#555" stroke-width="1.8" marker-end="url(#arrow)"/>
+	<text x="925" y="385" font-size="12.5" fill="#555">proxy 集成</text>
+
+	<line x1="1030" y1="530" x2="1097" y2="530" stroke="#555" stroke-width="1.8" marker-end="url(#arrow)"/>
+	<text x="1064" y="520" font-size="11" fill="#555" text-anchor="middle">内网 :5432</text>
+
+	<!-- Lambda 出站链路：Lambda → NAT → IGW → GitHub API -->
+	<line x1="860" y1="615" x2="832" y2="727" stroke="#555" stroke-width="1.8" marker-end="url(#arrow)"/>
+	<text x="880" y="668" font-size="11.5" fill="#555">出站访问 GitHub</text>
+
+	<line x1="930" y1="785" x2="962" y2="785" stroke="#555" stroke-width="1.8" marker-end="url(#arrow)"/>
+
+	<path d="M 1055 730 L 1055 337 L 1494 337" fill="none" stroke="#555" stroke-width="1.8" marker-end="url(#arrow)"/>
+	<text x="1250" y="325" font-size="12" fill="#555" text-anchor="middle">GET api.github.com/user</text>
+
+	<!-- 构建时耦合：VITE_SERVER_URL -->
+	<line x1="540" y1="300" x2="757" y2="278" stroke="#999" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrow-dash)"/>
+	<text x="648" y="272" font-size="12" fill="#888" text-anchor="middle">VITE_SERVER_URL 指向</text>
+
+	<!-- 本地开发链路 -->
+	<path d="M 380 700 L 480 865 L 1284 865 L 1284 846" fill="none" stroke="#0284c7" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrow-blue)"/>
+	<text x="820" y="856" font-size="12" fill="#0284c7" text-anchor="middle">SSM 加密通道（仅出站 443，经 AWS 侧中转）</text>
+
+	<line x1="1290" y1="727" x2="1282" y2="620" stroke="#0284c7" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrow-blue)"/>
+	<text x="1305" y="678" font-size="11.5" fill="#0284c7">:5432</text>
+
+	<!-- 部署链路 -->
+	<line x1="600" y1="1010" x2="333" y2="463" stroke="#999" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrow-dash)"/>
+	<text x="505" y="800" font-size="12" fill="#888">push 触发自动构建</text>
+
+	<line x1="803" y1="1060" x2="947" y2="1060" stroke="#999" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrow-dash)"/>
+	<text x="875" y="1048" font-size="12" fill="#888" text-anchor="middle">push（paths 命中）</text>
+
+	<line x1="1120" y1="1007" x2="1120" y2="973" stroke="#999" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrow-dash)"/>
+	<text x="1138" y="995" font-size="12" fill="#888">sam deploy（OIDC）→ 更新 Lambda</text>
+</svg>
