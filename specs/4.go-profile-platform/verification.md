@@ -36,7 +36,7 @@
 | F-021 | 已证明 | 部署后 `GET /` 与 `account.list` tRPC 均返回 200，API ID 未变化，Node/Lambda 原链路无回归。 |
 | F-022 | 已证明 | Lambda 已通过 Cloud Map private DNS 成功 generate/cache hit；force new deployment 后 Task IP 从 `10.0.2.84` 变为 `10.0.3.90`，再次调用仍为 200/cache hit。 |
 | F-023 | 已证明 | production Task 已从 Secret 启动并通过应用启动前 `pool.Ping`，Execution Role 的 production Secret 只读边界已云端核对。 |
-| F-024 | 部分完成 | 首次真实 CodeBuild 在 PRE_BUILD 安全门失败，已证明失败不会写 ECR 或更新 ECS；仍需一次成功 build/deploy/smoke log。 |
+| F-024 | 部分完成 | 首次真实 CodeBuild 在 PRE_BUILD 安全门失败且未写 ECR；第二次已完成测试、Docker build 与 ECR push，但 POST_BUILD 因缺少 `GetTemplateSummary` 被拒绝。两次均未更新 ECS；仍需一次成功 deploy/smoke log。 |
 | F-025 | 已证明 | production `prod-<sha>`、preview `pr-<number>-<40sha>` 约束与共享 preview key 测试。 |
 | F-026 | 待云端验收 | 参数化 PR Task Definitions/Service/TG/Rule/schema 已存在；需两个 PR 实例证据。 |
 | F-027 | 已证明 | PR template 只 import 共享 VPC/cluster/ECR/ALB/API/RDS foundation outputs。 |
@@ -81,7 +81,7 @@
 
 ## 当前仍待完成的外部证据
 
-1. foundation、IAM、production ECS runtime、VPC Link/API Gateway 与 CodeBuild projects/webhooks 均已于 2026-07-16 完成真实云端部署；CodeBuild 尚未执行首次 production build。
+1. foundation、IAM、production ECS runtime、VPC Link/API Gateway 与 CodeBuild projects/webhooks 均已于 2026-07-16 完成真实云端部署；production CodeBuild 已执行两次，T-902 构建与 ECR 推送已证明。只读 IAM 修复 Change Set 已执行并从实际 role policy 复核，T-903 仍待新提交重试。
 2. Lambda → Cloud Map → Go 已完成首次生成、缓存命中、不可用降级与 Task IP 替换后的重新发现验收。
 3. 两个真实 PR preview 与 close cleanup 尚未运行。
 4. 空 localStorage 浏览器验收尚未执行。

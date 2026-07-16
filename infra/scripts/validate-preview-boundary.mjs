@@ -35,11 +35,13 @@ assertIncludes(
 	productionBuildRole,
 	literal("stack/{ProjectName}-production/*"),
 );
+assertIncludes(productionBuildRole, "cloudformation:GetTemplateSummary");
 assertExcludes(productionBuildRole, literal("stack/{ProjectName}-pr-"));
 
 const previewBuildRole = resourceBlock(iam, "PreviewCodeBuildRole");
 assertIncludes(previewBuildRole, literal("project/{ProjectName}-preview"));
 assertIncludes(previewBuildRole, literal("stack/{ProjectName}-pr-*/*"));
+assertIncludes(previewBuildRole, "cloudformation:GetTemplateSummary");
 assertIncludes(previewBuildRole, "PassOnlyPreviewExecutionRole");
 assertExcludes(previewBuildRole, "Resource: !GetAtt EcsTaskExecutionRole.Arn");
 assertExcludes(previewBuildRole, "ecs:DeregisterTaskDefinition");

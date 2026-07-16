@@ -266,7 +266,9 @@ Resources:
             Statement:
               - Sid: ValidateTemplates
                 Effect: Allow
-                Action: cloudformation:ValidateTemplate
+                Action:
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:ValidateTemplate
                 Resource: "*"
               - Sid: ManageOnlyProductionStack
                 Effect: Allow
@@ -453,7 +455,9 @@ Resources:
             Statement:
               - Sid: ValidateTemplates
                 Effect: Allow
-                Action: cloudformation:ValidateTemplate
+                Action:
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:ValidateTemplate
                 Resource: "*"
               - Sid: ManageOnlyPreviewStacks
                 Effect: Allow
