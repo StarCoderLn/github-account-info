@@ -42,6 +42,18 @@ func TestPreviewDDLNeverReferencesProductionTables(t *testing.T) {
 	}
 }
 
+func TestPreviewSeedUsesExplicitParameterTypes(t *testing.T) {
+	account := seedAccountStatement("pr_123")
+	introduction := seedIntroductionStatement("pr_123")
+
+	if !strings.Contains(account, "$1::bigint") {
+		t.Fatalf("account seed does not cast the PR number to bigint:\n%s", account)
+	}
+	if !strings.Contains(introduction, "$1::text") || !strings.Contains(introduction, "$1::bigint") {
+		t.Fatalf("introduction seed does not cast the PR number for both text and bigint contexts:\n%s", introduction)
+	}
+}
+
 func TestDropRequiresExactSchemaConfirmation(t *testing.T) {
 	err := Drop(t.Context(), panicBeginner{}, 123, "pr_124")
 	if !errors.Is(err, ErrUnsafeConfirmation) {
