@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { BookOpen, Trash2, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { previewEnvironment } from "@/utils/preview-request";
 import {
 	addToken,
 	getTokens,
@@ -13,6 +14,15 @@ import {
 import { trpc } from "@/utils/trpc";
 
 export const Route = createFileRoute("/")({
+	beforeLoad: () => {
+		if (previewEnvironment !== null) {
+			throw redirect({
+				to: "/u/$username",
+				params: { username: "preview-user" },
+				replace: true,
+			});
+		}
+	},
 	component: TokenPage,
 });
 

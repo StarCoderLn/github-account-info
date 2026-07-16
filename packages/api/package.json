@@ -1,27 +1,30 @@
 {
-  "name": "@github-account-info/api",
-  "type": "module",
-  "exports": {
-    ".": {
-      "default": "./src/index.ts"
-    },
-    "./*": {
-      "default": "./src/*.ts"
-    }
-  },
-  "scripts": {},
-  "dependencies": {
-    "@github-account-info/db": "workspace:*",
-    "@github-account-info/env": "workspace:*",
-    "@trpc/client": "catalog:",
-    "@trpc/server": "catalog:",
-    "dotenv": "catalog:",
-    "drizzle-orm": "^0.45.2",
-    "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@github-account-info/config": "workspace:*",
-    "hono": "catalog:",
-    "typescript": "catalog:"
-  }
+	"name": "@github-account-info/api",
+	"type": "module",
+	"exports": {
+		".": {
+			"default": "./src/index.ts"
+		},
+		"./*": {
+			"default": "./src/*.ts"
+		}
+	},
+	"scripts": {
+		"test": "tsx --test src/**/*.test.ts"
+	},
+	"dependencies": {
+		"@github-account-info/db": "workspace:*",
+		"@github-account-info/env": "workspace:*",
+		"@trpc/client": "catalog:",
+		"@trpc/server": "catalog:",
+		"dotenv": "catalog:",
+		"drizzle-orm": "^0.45.2",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@github-account-info/config": "workspace:*",
+		"hono": "catalog:",
+		"tsx": "^4.19.2",
+		"typescript": "catalog:"
+	}
 }

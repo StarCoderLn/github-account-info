@@ -1,0 +1,1 @@
+CREATE INDEX "github_account_login_lower_idx" ON "github_account" USING btree (lower("login"));

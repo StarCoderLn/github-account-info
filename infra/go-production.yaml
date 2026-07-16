@@ -1,0 +1,385 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Production runtime for the github-account-info Go API. Requires the shared
+  go-foundation stack exports and an immutable prod-<commit-sha> ECR image.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Deployment identity
+        Parameters:
+          - ProjectName
+          - ImageTag
+      - Label:
+          default: Runtime
+        Parameters:
+          - DesiredCount
+          - CorsOrigins
+          - CorsPreviewOriginSuffix
+          - ProductionListenerPriority
+      - Label:
+          default: Monitoring
+        Parameters:
+          - AlarmTopicArn
+    ParameterLabels:
+      ImageTag:
+        default: Immutable ECR tag in prod-<commit-sha> format
+      CorsOrigins:
+        default: Comma-separated exact browser origins
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: github-account-info-go
+    MinLength: 3
+    MaxLength: 22
+    AllowedPattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+  ImageTag:
+    Type: String
+    AllowedPattern: "^prod-[0-9a-f]{7,40}$"
+    ConstraintDescription: Use prod- followed by a 7-40 character lowercase Git commit SHA.
+  DesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 4
+    Description: Initial production task count. Version 1 defaults to one task.
+  CorsOrigins:
+    Type: String
+    Default: https://github-account-info.pages.dev
+    MinLength: 8
+    MaxLength: 1024
+    Description: >-
+      Comma-separated exact origins accepted by the Go API. Do not include a
+      path, wildcard, query, fragment, or trailing slash.
+  CorsPreviewOriginSuffix:
+    Type: String
+    Default: .github-account-info.pages.dev
+    AllowedPattern: '^\.[a-z0-9][a-z0-9.-]*[a-z0-9]$'
+    Description: HTTPS-only Cloudflare Pages preview hostname suffix; no wildcard.
+  ProductionListenerPriority:
+    Type: Number
+    Default: 50000
+    MinValue: 50000
+    MaxValue: 50000
+    Description: >-
+      Production path rule priority. Preview rules use their PR number in 1-49999.
+  AlarmTopicArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:(aws|aws-us-gov|aws-cn):sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$"
+    Description: >-
+      Optional existing SNS topic ARN for alarm and recovery notifications.
+      Leave empty to create visible CloudWatch alarms without notifications.
+
+Conditions:
+  HasAlarmTopic: !Not
+    - !Equals
+      - !Ref AlarmTopicArn
+      - ""
+
+Resources:
+  ProductionTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ProjectName}-production
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: "256"
+      Memory: "512"
+      ExecutionRoleArn:
+        Fn::ImportValue: !Sub ${ProjectName}-EcsTaskExecutionRoleArn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: go-api
+          Essential: true
+          Image: !Join
+            - ":"
+            - - Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryUri
+              - !Ref ImageTag
+          User: "65532:65532"
+          ReadonlyRootFilesystem: true
+          StopTimeout: 15
+          PortMappings:
+            - Name: http
+              ContainerPort: 8080
+              Protocol: tcp
+              AppProtocol: http
+          Environment:
+            - Name: APP_ENV
+              Value: production
+            - Name: PORT
+              Value: "8080"
+            - Name: DB_SCHEMA
+              Value: public
+            - Name: RDS_CA_BUNDLE
+              Value: /etc/ssl/certs/rds-us-east-2-bundle.pem
+            - Name: CORS_ORIGINS
+              Value: !Ref CorsOrigins
+            - Name: CORS_PREVIEW_ORIGIN_SUFFIX
+              Value: !Ref CorsPreviewOriginSuffix
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom:
+                Fn::ImportValue: !Sub ${ProjectName}-DatabaseUrlSecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub ${ProjectName}-EcsLogGroupName
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: production
+              mode: non-blocking
+              max-buffer-size: 4m
+          DockerLabels:
+            com.github-account-info.project: !Ref ProjectName
+            com.github-account-info.environment: production
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: ImageTag
+          Value: !Ref ImageTag
+
+  ProductionTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ProjectName}-prod
+      VpcId:
+        Fn::ImportValue: !Sub ${ProjectName}-VpcId
+      Protocol: HTTP
+      ProtocolVersion: HTTP1
+      Port: 8080
+      TargetType: ip
+      IpAddressType: ipv4
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: traffic-port
+      HealthCheckPath: /healthz
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+        - Key: stickiness.enabled
+          Value: "false"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ProductionListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn:
+        Fn::ImportValue: !Sub ${ProjectName}-InternalHttpListenerArn
+      Priority: !Ref ProductionListenerPriority
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - /api/v1/*
+              - /healthz
+              - /readyz
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref ProductionTargetGroup
+
+  ProductionService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ProductionListenerRule
+    Properties:
+      ServiceName: !Sub ${ProjectName}-production
+      Cluster:
+        Fn::ImportValue: !Sub ${ProjectName}-EcsClusterArn
+      TaskDefinition: !Ref ProductionTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      PlatformVersion: LATEST
+      SchedulingStrategy: REPLICA
+      AvailabilityZoneRebalancing: ENABLED
+      EnableECSManagedTags: true
+      EnableExecuteCommand: false
+      PropagateTags: SERVICE
+      HealthCheckGracePeriodSeconds: 30
+      CapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Base: 1
+          Weight: 1
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - Fn::ImportValue: !Sub ${ProjectName}-GoTaskSecurityGroupId
+          Subnets: !Split
+            - ","
+            - Fn::ImportValue: !Sub ${ProjectName}-PrivateSubnetIds
+      LoadBalancers:
+        - ContainerName: go-api
+          ContainerPort: 8080
+          TargetGroupArn: !Ref ProductionTargetGroup
+      ServiceRegistries:
+        - RegistryArn:
+            Fn::ImportValue: !Sub ${ProjectName}-CloudMapServiceArn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: ImageTag
+          Value: !Ref ImageTag
+
+  ProductionUnhealthyTargetsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-production-unhealthy-targets
+      AlarmDescription: Production ALB has one or more unhealthy Go targets.
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value:
+            Fn::ImportValue: !Sub ${ProjectName}-InternalLoadBalancerFullName
+        - Name: TargetGroup
+          Value: !GetAtt ProductionTargetGroup.TargetGroupFullName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      OKActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+
+  ProductionTarget5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-production-target-5xx
+      AlarmDescription: Production Go targets returned repeated HTTP 5xx responses.
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value:
+            Fn::ImportValue: !Sub ${ProjectName}-InternalLoadBalancerFullName
+        - Name: TargetGroup
+          Value: !GetAtt ProductionTargetGroup.TargetGroupFullName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      OKActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+
+  ProductionRunningTaskCountAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-production-no-running-task
+      AlarmDescription: Production ECS service has no running Go task.
+      Namespace: ECS/ContainerInsights
+      MetricName: RunningTaskCount
+      Dimensions:
+        - Name: ClusterName
+          Value:
+            Fn::ImportValue: !Sub ${ProjectName}-EcsClusterName
+        - Name: ServiceName
+          Value: !GetAtt ProductionService.Name
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      OKActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+
+  ProductionHighCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-production-high-cpu
+      AlarmDescription: Production ECS service CPU utilization stayed above 85 percent.
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value:
+            Fn::ImportValue: !Sub ${ProjectName}-EcsClusterName
+        - Name: ServiceName
+          Value: !GetAtt ProductionService.Name
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 85
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      OKActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+
+Outputs:
+  ImageTag:
+    Description: Immutable ECR tag deployed by this stack revision.
+    Value: !Ref ImageTag
+  TaskDefinitionArn:
+    Value: !Ref ProductionTaskDefinition
+  TargetGroupArn:
+    Value: !Ref ProductionTargetGroup
+  EcsServiceArn:
+    Value: !Ref ProductionService
+  EcsServiceName:
+    Value: !GetAtt ProductionService.Name

@@ -1,0 +1,431 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Shared runtime foundation for the github-account-info Go API: ECR, ECS
+  cluster, Cloud Map private DNS, internal ALB, network boundaries, and logs.
+  IAM roles live in the dependent go-iam.yaml stack.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Naming
+        Parameters:
+          - ProjectName
+          - CloudMapNamespaceName
+          - CloudMapServiceName
+      - Label:
+          default: Existing VPC resources
+        Parameters:
+          - VpcId
+          - PrivateSubnetIds
+          - LambdaSecurityGroupId
+          - RdsSecurityGroupId
+      - Label:
+          default: Retention
+        Parameters:
+          - EcsLogRetentionDays
+    ParameterLabels:
+      PrivateSubnetIds:
+        default: Private subnets in at least two Availability Zones
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: github-account-info-go
+    MinLength: 3
+    MaxLength: 22
+    AllowedPattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+    ConstraintDescription: >-
+      Use 3-22 lowercase letters, digits, and hyphens, starting with a letter
+      and ending with a letter or digit.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC containing Lambda, private subnets, and RDS.
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >-
+      At least two private subnet IDs in distinct Availability Zones. The
+      internal ALB and later Fargate services use these subnets.
+  LambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Existing security group attached to the Node Lambda.
+  RdsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Existing security group attached to the production RDS instance.
+  CloudMapNamespaceName:
+    Type: String
+    Default: github-account-info.local
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+  CloudMapServiceName:
+    Type: String
+    Default: go-api
+    AllowedPattern: "^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+  EcsLogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues:
+      - 7
+      - 14
+      - 30
+      - 60
+      - 90
+      - 120
+      - 180
+      - 365
+
+Resources:
+  GoRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Ref ProjectName
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep the newest 30 production images",
+                "selection": {
+                  "tagStatus": "tagged",
+                  "tagPrefixList": ["prod-"],
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 30
+                },
+                "action": {"type": "expire"}
+              },
+              {
+                "rulePriority": 2,
+                "description": "Expire PR images after 14 days as a cleanup fallback",
+                "selection": {
+                  "tagStatus": "tagged",
+                  "tagPrefixList": ["pr-"],
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 14
+                },
+                "action": {"type": "expire"}
+              },
+              {
+                "rulePriority": 3,
+                "description": "Expire untagged images after 7 days",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 7
+                },
+                "action": {"type": "expire"}
+              }
+            ]
+          }
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Scope
+          Value: shared
+        - Key: ManagedBy
+          Value: cloudformation
+
+  GoEcsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /ecs/${ProjectName}
+      RetentionInDays: !Ref EcsLogRetentionDays
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Scope
+          Value: shared
+        - Key: ManagedBy
+          Value: cloudformation
+
+  GoCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ProjectName
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Base: 1
+          Weight: 1
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enhanced
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Scope
+          Value: shared
+        - Key: ManagedBy
+          Value: cloudformation
+
+  CloudMapNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: !Ref CloudMapNamespaceName
+      Description: Private DNS namespace for github-account-info services
+      Vpc: !Ref VpcId
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Scope
+          Value: shared
+        - Key: ManagedBy
+          Value: cloudformation
+
+  GoCloudMapService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: !Ref CloudMapServiceName
+      Description: Direct private discovery for Go ECS tasks
+      NamespaceId: !Ref CloudMapNamespace
+      DnsConfig:
+        RoutingPolicy: MULTIVALUE
+        DnsRecords:
+          - Type: A
+            TTL: 10
+      HealthCheckCustomConfig: {}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Scope
+          Value: shared
+        - Key: ManagedBy
+          Value: cloudformation
+
+  GoTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${ProjectName} Fargate task boundary
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - Description: PostgreSQL to the existing RDS security group
+          IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          DestinationSecurityGroupId: !Ref RdsSecurityGroupId
+        - Description: HTTPS to AWS APIs through existing NAT or VPC endpoints
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-task-sg
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Scope
+          Value: shared
+        - Key: ManagedBy
+          Value: cloudformation
+
+  InternalAlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${ProjectName} internal ALB boundary
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - Description: Forward traffic and health checks to Go tasks
+          IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          DestinationSecurityGroupId: !GetAtt GoTaskSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-internal-alb-sg
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Scope
+          Value: shared
+        - Key: ManagedBy
+          Value: cloudformation
+
+  VpcLinkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${ProjectName} API Gateway VPC Link boundary
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - Description: HTTP to the internal ALB listener only
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          DestinationSecurityGroupId: !GetAtt InternalAlbSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-vpc-link-sg
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Scope
+          Value: shared
+        - Key: ManagedBy
+          Value: cloudformation
+
+  AlbIngressFromVpcLink:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: API Gateway VPC Link to internal ALB
+      GroupId: !GetAtt InternalAlbSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId: !GetAtt VpcLinkSecurityGroup.GroupId
+
+  GoIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Internal ALB forwarding and health checks
+      GroupId: !GetAtt GoTaskSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !GetAtt InternalAlbSecurityGroup.GroupId
+
+  GoIngressFromLambda:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Node Lambda direct calls through Cloud Map DNS
+      GroupId: !GetAtt GoTaskSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref LambdaSecurityGroupId
+
+  RdsIngressFromGo:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Go ECS tasks to PostgreSQL
+      GroupId: !Ref RdsSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !GetAtt GoTaskSecurityGroup.GroupId
+
+  InternalLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${ProjectName}-internal
+      Scheme: internal
+      Type: application
+      IpAddressType: ipv4
+      SecurityGroups:
+        - !GetAtt InternalAlbSecurityGroup.GroupId
+      Subnets: !Ref PrivateSubnetIds
+      LoadBalancerAttributes:
+        - Key: deletion_protection.enabled
+          Value: "false"
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: "true"
+        - Key: routing.http.desync_mitigation_mode
+          Value: strictest
+        - Key: idle_timeout.timeout_seconds
+          Value: "60"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Scope
+          Value: shared
+        - Key: ManagedBy
+          Value: cloudformation
+
+  InternalHttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref InternalLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: application/json
+            MessageBody: '{"error":{"code":"route_not_configured","message":"no backend route is configured"}}'
+            StatusCode: "404"
+
+
+Outputs:
+  VpcId:
+    Description: Existing VPC used by the platform.
+    Value: !Ref VpcId
+    Export:
+      Name: !Sub ${ProjectName}-VpcId
+  PrivateSubnetIds:
+    Description: Comma-delimited private subnet IDs.
+    Value: !Join [",", !Ref PrivateSubnetIds]
+    Export:
+      Name: !Sub ${ProjectName}-PrivateSubnetIds
+  EcrRepositoryName:
+    Value: !Ref GoRepository
+    Export:
+      Name: !Sub ${ProjectName}-EcrRepositoryName
+  EcrRepositoryArn:
+    Value: !GetAtt GoRepository.Arn
+    Export:
+      Name: !Sub ${ProjectName}-EcrRepositoryArn
+  EcrRepositoryUri:
+    Value: !GetAtt GoRepository.RepositoryUri
+    Export:
+      Name: !Sub ${ProjectName}-EcrRepositoryUri
+  EcsClusterName:
+    Value: !Ref GoCluster
+    Export:
+      Name: !Sub ${ProjectName}-EcsClusterName
+  EcsClusterArn:
+    Value: !GetAtt GoCluster.Arn
+    Export:
+      Name: !Sub ${ProjectName}-EcsClusterArn
+  EcsLogGroupName:
+    Value: !Ref GoEcsLogGroup
+    Export:
+      Name: !Sub ${ProjectName}-EcsLogGroupName
+  EcsLogGroupArn:
+    Value: !GetAtt GoEcsLogGroup.Arn
+    Export:
+      Name: !Sub ${ProjectName}-EcsLogGroupArn
+  CloudMapNamespaceId:
+    Value: !Ref CloudMapNamespace
+    Export:
+      Name: !Sub ${ProjectName}-CloudMapNamespaceId
+  CloudMapServiceArn:
+    Value: !GetAtt GoCloudMapService.Arn
+    Export:
+      Name: !Sub ${ProjectName}-CloudMapServiceArn
+  CloudMapServiceDnsName:
+    Value: !Sub ${CloudMapServiceName}.${CloudMapNamespaceName}
+    Export:
+      Name: !Sub ${ProjectName}-CloudMapServiceDnsName
+  InternalLoadBalancerArn:
+    Value: !Ref InternalLoadBalancer
+    Export:
+      Name: !Sub ${ProjectName}-InternalLoadBalancerArn
+  InternalLoadBalancerDnsName:
+    Value: !GetAtt InternalLoadBalancer.DNSName
+    Export:
+      Name: !Sub ${ProjectName}-InternalLoadBalancerDnsName
+  InternalLoadBalancerFullName:
+    Description: CloudWatch dimension value for the internal ALB.
+    Value: !GetAtt InternalLoadBalancer.LoadBalancerFullName
+    Export:
+      Name: !Sub ${ProjectName}-InternalLoadBalancerFullName
+  InternalHttpListenerArn:
+    Value: !Ref InternalHttpListener
+    Export:
+      Name: !Sub ${ProjectName}-InternalHttpListenerArn
+  GoTaskSecurityGroupId:
+    Value: !GetAtt GoTaskSecurityGroup.GroupId
+    Export:
+      Name: !Sub ${ProjectName}-GoTaskSecurityGroupId
+  VpcLinkSecurityGroupId:
+    Value: !GetAtt VpcLinkSecurityGroup.GroupId
+    Export:
+      Name: !Sub ${ProjectName}-VpcLinkSecurityGroupId

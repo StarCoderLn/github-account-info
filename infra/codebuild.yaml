@@ -1,0 +1,508 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Trusted master-branch CodeBuild project for testing, building, pushing, and
+  deploying the github-account-info Go API. PR builds use a separate project
+  defined later and must not reuse this production webhook.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Project identity
+        Parameters:
+          - ProjectName
+          - GitHubRepositoryUrl
+          - GitHubConnectionArn
+      - Label:
+          default: Production endpoint
+        Parameters:
+          - PublicApiBaseUrl
+          - CorsOrigins
+      - Label:
+          default: Build capacity
+        Parameters:
+          - CodeBuildImage
+          - ComputeType
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: github-account-info-go
+    MinLength: 3
+    MaxLength: 22
+    AllowedPattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+  GitHubRepositoryUrl:
+    Type: String
+    Default: https://github.com/StarCoderLn/github-account-info.git
+    AllowedPattern: "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\.git$"
+  GitHubConnectionArn:
+    Type: String
+    Description: Existing AVAILABLE AWS CodeConnections connection authorized for this repository.
+    AllowedPattern: "^arn:(aws|aws-us-gov|aws-cn):codeconnections:[a-z0-9-]+:[0-9]{12}:connection/[A-Za-z0-9-]+$"
+  PublicApiBaseUrl:
+    Type: String
+    Description: Existing API Gateway base URL used for post-deployment smoke tests.
+    AllowedPattern: "^https://[a-z0-9-]+\\.execute-api\\.[a-z0-9-]+\\.amazonaws\\.com(\\.cn)?$"
+  CorsOrigins:
+    Type: String
+    Default: https://github-account-info.pages.dev
+    MinLength: 8
+    MaxLength: 1024
+  CodeBuildImage:
+    Type: String
+    Default: aws/codebuild/standard:7.0
+    AllowedValues:
+      - aws/codebuild/standard:7.0
+  ComputeType:
+    Type: String
+    Default: BUILD_GENERAL1_SMALL
+    AllowedValues:
+      - BUILD_GENERAL1_SMALL
+      - BUILD_GENERAL1_MEDIUM
+
+Resources:
+  CodeBuildConnectionUsePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${ProjectName}-use-github-connection
+      Roles:
+        - Fn::ImportValue: !Sub ${ProjectName}-CodeBuildRoleName
+        - Fn::ImportValue: !Sub ${ProjectName}-PreviewCodeBuildRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: UseOnlyConfiguredGitHubConnection
+            Effect: Allow
+            Action:
+              - codeconnections:GetConnection
+              - codeconnections:GetConnectionToken
+              - codeconnections:UseConnection
+            Resource: !Ref GitHubConnectionArn
+
+  ProductionBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/codebuild/${ProjectName}-production
+      RetentionInDays: 30
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ProductionBuildProject:
+    Type: AWS::CodeBuild::Project
+    DependsOn:
+      - CodeBuildConnectionUsePolicy
+    Properties:
+      Name: !Sub ${ProjectName}-production
+      Description: Trusted master build and deployment for the Go API
+      ServiceRole:
+        Fn::ImportValue: !Sub ${ProjectName}-CodeBuildRoleArn
+      Source:
+        Type: GITHUB
+        Location: !Ref GitHubRepositoryUrl
+        SourceIdentifier: PRIMARY_SOURCE
+        GitCloneDepth: 1
+        BuildSpec: infra/buildspec/go-production.yml
+        ReportBuildStatus: true
+        BuildStatusConfig:
+          Context: codebuild/go-production
+        Auth:
+          Type: CODECONNECTIONS
+          Resource: !Ref GitHubConnectionArn
+      SourceVersion: refs/heads/master
+      Triggers:
+        Webhook: true
+        BuildType: BUILD
+        FilterGroups:
+          - - Type: EVENT
+              Pattern: PUSH
+            - Type: HEAD_REF
+              Pattern: ^refs/heads/master$
+            - Type: FILE_PATH
+              Pattern: >-
+                ^(apps/go-api/|infra/(go-foundation\.yaml|go-production\.yaml|codebuild\.yaml|buildspec/go-production\.yml|scripts/deploy-go-production\.sh)|packages/db/src/(migrations|schema)/).*
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_DOCKER_LAYER_CACHE
+          - LOCAL_SOURCE_CACHE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: !Ref CodeBuildImage
+        ComputeType: !Ref ComputeType
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: PROJECT_NAME
+            Type: PLAINTEXT
+            Value: !Ref ProjectName
+          - Name: AWS_ACCOUNT_ID
+            Type: PLAINTEXT
+            Value: !Ref AWS::AccountId
+          - Name: AWS_URL_SUFFIX
+            Type: PLAINTEXT
+            Value: !Ref AWS::URLSuffix
+          - Name: ECR_REPOSITORY_NAME
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryName
+          - Name: ECR_REPOSITORY_URI
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryUri
+          - Name: ECS_CLUSTER_NAME
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: !Sub ${ProjectName}-EcsClusterName
+          - Name: ECS_SERVICE_NAME
+            Type: PLAINTEXT
+            Value: !Sub ${ProjectName}-production
+          - Name: PRODUCTION_STACK_NAME
+            Type: PLAINTEXT
+            Value: !Sub ${ProjectName}-production
+          - Name: PUBLIC_API_BASE_URL
+            Type: PLAINTEXT
+            Value: !Ref PublicApiBaseUrl
+          - Name: CORS_ORIGINS
+            Type: PLAINTEXT
+            Value: !Ref CorsOrigins
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref ProductionBuildLogGroup
+          StreamName: build
+        S3Logs:
+          Status: DISABLED
+      TimeoutInMinutes: 60
+      QueuedTimeoutInMinutes: 30
+      ConcurrentBuildLimit: 1
+      BadgeEnabled: false
+      Visibility: PRIVATE
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+  PreviewBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/codebuild/${ProjectName}-preview
+      RetentionInDays: 14
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: preview
+        - Key: ManagedBy
+          Value: cloudformation
+
+  PreviewBuildProject:
+    Type: AWS::CodeBuild::Project
+    DependsOn:
+      - CodeBuildConnectionUsePolicy
+    Properties:
+      Name: !Sub ${ProjectName}-preview
+      Description: Approved pull-request build, deployment, and cleanup for isolated Go previews
+      ServiceRole:
+        Fn::ImportValue: !Sub ${ProjectName}-PreviewCodeBuildRoleArn
+      Source:
+        Type: GITHUB
+        Location: !Ref GitHubRepositoryUrl
+        SourceIdentifier: PRIMARY_SOURCE
+        GitCloneDepth: 0
+        ReportBuildStatus: true
+        BuildStatusConfig:
+          Context: codebuild/go-preview
+        Auth:
+          Type: CODECONNECTIONS
+          Resource: !Ref GitHubConnectionArn
+        # Keep privileged AWS orchestration outside PR-controlled files.
+        BuildSpec: |
+          version: 0.2
+          env:
+            shell: bash
+          phases:
+            install:
+              commands:
+                - set -euo pipefail
+                - aws --version
+                - docker version
+                - node --version
+            pre_build:
+              commands:
+                - set -euo pipefail
+                - '[[ "${CODEBUILD_SOURCE_VERSION:-}" =~ ^pr/([1-9][0-9]{0,4})$ ]] || { echo "source version must be pr/<1-49999>" >&2; exit 1; }'
+                - PR_NUMBER="${BASH_REMATCH[1]}"
+                - '(( PR_NUMBER <= 49999 )) || { echo "PR number exceeds listener priority range" >&2; exit 1; }'
+                - STACK_NAME="${PROJECT_NAME}-pr-${PR_NUMBER}"
+                - SCHEMA_NAME="pr_${PR_NUMBER}"
+                - rm -f "$CODEBUILD_SRC_DIR/.codebuild-preview-image-ready"
+                - |
+                  case "${CODEBUILD_WEBHOOK_EVENT:-}" in
+                    PULL_REQUEST_CREATED|PULL_REQUEST_UPDATED|PULL_REQUEST_REOPENED)
+                      PREVIEW_ACTION=deploy
+                      ;;
+                    PULL_REQUEST_MERGED|PULL_REQUEST_CLOSED)
+                      PREVIEW_ACTION=cleanup
+                      ;;
+                    *)
+                      echo "unsupported preview webhook event: ${CODEBUILD_WEBHOOK_EVENT:-missing}" >&2
+                      exit 1
+                      ;;
+                  esac
+                - |
+                  if [[ "$PREVIEW_ACTION" == "deploy" ]]; then
+                    COMMIT_SHA="$(git rev-parse HEAD^2 2>/dev/null || git rev-parse HEAD)"
+                    COMMIT_SHA="$(printf '%s' "$COMMIT_SHA" | tr '[:upper:]' '[:lower:]')"
+                    [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "head commit must be a full SHA" >&2; exit 1; }
+                    PREVIEW_KEY="$(node packages/preview-environment/cli.mjs "$COMMIT_SHA")"
+                    [[ "$PREVIEW_KEY" =~ ^preview-[0-9a-f]{12}$ ]] || { echo "invalid preview key" >&2; exit 1; }
+                    IMAGE_TAG="pr-${PR_NUMBER}-${COMMIT_SHA}"
+                    IMAGE_URI="${ECR_REPOSITORY_URI}:${IMAGE_TAG}"
+                    EXPIRES_AT="$(date -u -d '+7 days' '+%Y-%m-%dT%H:%M:%SZ')"
+                    GO_BUILDER_IMAGE="$(awk '$1 == "FROM" && $2 ~ /^golang:/ { print $2; exit }' apps/go-api/Dockerfile)"
+                    [[ "$GO_BUILDER_IMAGE" == *@sha256:* ]] || { echo "Go builder image must be digest-pinned" >&2; exit 1; }
+                    aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.${AWS_URL_SUFFIX:-amazonaws.com}"
+                    docker pull "$GO_BUILDER_IMAGE"
+                  fi
+                - export PR_NUMBER STACK_NAME SCHEMA_NAME PREVIEW_ACTION COMMIT_SHA PREVIEW_KEY IMAGE_TAG IMAGE_URI EXPIRES_AT GO_BUILDER_IMAGE
+            build:
+              commands:
+                - set -euo pipefail
+                - |
+                  if [[ "$PREVIEW_ACTION" == "deploy" ]]; then
+                    UNFORMATTED="$(docker run --rm -v "$CODEBUILD_SRC_DIR/apps/go-api:/src:ro" -w /src "$GO_BUILDER_IMAGE" sh -c 'gofmt -l .')"
+                    [[ -z "$UNFORMATTED" ]] || { printf 'Unformatted Go files:\n%s\n' "$UNFORMATTED" >&2; exit 1; }
+                    docker run --rm -v "$CODEBUILD_SRC_DIR/apps/go-api:/src:ro" -v go-mod-cache:/go/pkg/mod -v go-build-cache:/root/.cache/go-build -w /src "$GO_BUILDER_IMAGE" go mod verify
+                    docker run --rm -v "$CODEBUILD_SRC_DIR/apps/go-api:/src:ro" -v go-mod-cache:/go/pkg/mod -v go-build-cache:/root/.cache/go-build -w /src "$GO_BUILDER_IMAGE" go vet ./...
+                    docker run --rm -v "$CODEBUILD_SRC_DIR/apps/go-api:/src:ro" -v go-mod-cache:/go/pkg/mod -v go-build-cache:/root/.cache/go-build -w /src "$GO_BUILDER_IMAGE" go test ./...
+                    DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --pull --tag "$IMAGE_URI" apps/go-api
+                    [[ "$(docker image inspect --format '{{.Config.User}}' "$IMAGE_URI")" == "65532:65532" ]] || { echo "preview image is not non-root" >&2; exit 1; }
+                    docker push "$IMAGE_URI"
+                    IMAGE_DIGEST="$(aws ecr describe-images --repository-name "$ECR_REPOSITORY_NAME" --image-ids imageTag="$IMAGE_TAG" --query 'imageDetails[0].imageDigest' --output text)"
+                    [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "ECR image digest verification failed" >&2; exit 1; }
+                    touch "$CODEBUILD_SRC_DIR/.codebuild-preview-image-ready"
+                  fi
+            post_build:
+              commands:
+                - set -euo pipefail
+                - |
+                  run_database_task() {
+                    local operation="$1"
+                    local task_definition="$2"
+                    local command_json
+                    if [[ "$operation" == "create" ]]; then
+                      command_json="[\"create\",\"--pr-number\",\"${PR_NUMBER}\"]"
+                    else
+                      command_json="[\"drop\",\"--pr-number\",\"${PR_NUMBER}\",\"--confirm-schema\",\"${SCHEMA_NAME}\"]"
+                    fi
+                    local overrides="{\"containerOverrides\":[{\"name\":\"preview-db\",\"command\":${command_json}}]}"
+                    local task_arn
+                    task_arn="$(aws ecs run-task \
+                      --region "$AWS_DEFAULT_REGION" \
+                      --cluster "$ECS_CLUSTER_NAME" \
+                      --task-definition "$task_definition" \
+                      --launch-type FARGATE \
+                      --network-configuration "awsvpcConfiguration={subnets=[${PRIVATE_SUBNET_IDS}],securityGroups=[${GO_TASK_SECURITY_GROUP_ID}],assignPublicIp=DISABLED}" \
+                      --overrides "$overrides" \
+                      --query 'tasks[0].taskArn' \
+                      --output text)"
+                    [[ "$task_arn" == arn:*:ecs:*:task/* ]] || { echo "preview database task did not start" >&2; exit 1; }
+                    aws ecs wait tasks-stopped --region "$AWS_DEFAULT_REGION" --cluster "$ECS_CLUSTER_NAME" --tasks "$task_arn"
+                    local exit_code
+                    exit_code="$(aws ecs describe-tasks --region "$AWS_DEFAULT_REGION" --cluster "$ECS_CLUSTER_NAME" --tasks "$task_arn" --query 'tasks[0].containers[?name==`preview-db`].exitCode | [0]' --output text)"
+                    [[ "$exit_code" == "0" ]] || { echo "preview database ${operation} task failed with exit code ${exit_code}" >&2; exit 1; }
+                  }
+
+                  deploy_stack() {
+                    local routing_enabled="$1"
+                    local desired_count="$2"
+                    aws cloudformation deploy \
+                      --region "$AWS_DEFAULT_REGION" \
+                      --stack-name "$STACK_NAME" \
+                      --template-file infra/go-preview.yaml \
+                      --no-fail-on-empty-changeset \
+                      --parameter-overrides \
+                        ProjectName="$PROJECT_NAME" \
+                        PRNumber="$PR_NUMBER" \
+                        PreviewKey="$PREVIEW_KEY" \
+                        ImageTag="$IMAGE_TAG" \
+                        ExpiresAt="$EXPIRES_AT" \
+                        DesiredCount="$desired_count" \
+                        RoutingEnabled="$routing_enabled" \
+                        CorsOrigins="$CORS_ORIGINS" \
+                        CorsPreviewOriginSuffix="$CORS_PREVIEW_ORIGIN_SUFFIX" \
+                      --tags \
+                        Project="$PROJECT_NAME" \
+                        Environment=preview \
+                        PRNumber="$PR_NUMBER" \
+                        PreviewKey="$PREVIEW_KEY" \
+                        ExpiresAt="$EXPIRES_AT" \
+                        ManagedBy=cloudformation
+                  }
+
+                  stack_exists() {
+                    local output status
+                    set +e
+                    output="$(aws cloudformation describe-stacks --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME" --output text 2>&1)"
+                    status=$?
+                    set -e
+                    if [[ "$status" -eq 0 ]]; then return 0; fi
+                    if [[ "$output" == *"does not exist"* ]]; then return 1; fi
+                    echo "unable to determine preview stack state" >&2
+                    exit 1
+                  }
+
+                  if [[ "$PREVIEW_ACTION" == "deploy" ]]; then
+                    [[ "${CODEBUILD_BUILD_SUCCEEDING:-0}" == "1" ]] || { echo "build failed; preview deployment blocked" >&2; exit 1; }
+                    [[ -f "$CODEBUILD_SRC_DIR/.codebuild-preview-image-ready" ]] || { echo "verified preview image marker missing" >&2; exit 1; }
+                    if stack_exists; then
+                      deploy_stack true 1
+                      DATABASE_TASK_DEFINITION="$(aws cloudformation describe-stacks --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs[?OutputKey==`DatabaseTaskDefinitionArn`].OutputValue | [0]' --output text)"
+                      run_database_task create "$DATABASE_TASK_DEFINITION"
+                    else
+                      deploy_stack false 0
+                      DATABASE_TASK_DEFINITION="$(aws cloudformation describe-stacks --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs[?OutputKey==`DatabaseTaskDefinitionArn`].OutputValue | [0]' --output text)"
+                      run_database_task create "$DATABASE_TASK_DEFINITION"
+                      deploy_stack true 1
+                    fi
+                    aws ecs wait services-stable --region "$AWS_DEFAULT_REGION" --cluster "$ECS_CLUSTER_NAME" --services "${PROJECT_NAME}-pr-${PR_NUMBER}"
+                    curl --fail --silent --show-error --max-time 15 -H "X-Preview-Environment: ${PREVIEW_KEY}" "${PUBLIC_API_BASE_URL}/healthz" >/dev/null
+                    curl --fail --silent --show-error --max-time 15 -H "X-Preview-Environment: ${PREVIEW_KEY}" "${PUBLIC_API_BASE_URL}/api/v1/github-users/preview-user/introduction" >/dev/null
+                    echo "PR ${PR_NUMBER} preview ${PREVIEW_KEY} is ready"
+                  else
+                    if ! stack_exists; then
+                      echo "PR ${PR_NUMBER} preview stack is already absent"
+                      exit 0
+                    fi
+                    PREVIEW_KEY="$(aws cloudformation describe-stacks --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME" --query 'Stacks[0].Parameters[?ParameterKey==`PreviewKey`].ParameterValue | [0]' --output text)"
+                    IMAGE_TAG="$(aws cloudformation describe-stacks --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME" --query 'Stacks[0].Parameters[?ParameterKey==`ImageTag`].ParameterValue | [0]' --output text)"
+                    EXPIRES_AT="$(aws cloudformation describe-stacks --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME" --query 'Stacks[0].Parameters[?ParameterKey==`ExpiresAt`].ParameterValue | [0]' --output text)"
+                    deploy_stack false 0
+                    DATABASE_TASK_DEFINITION="$(aws cloudformation describe-stacks --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs[?OutputKey==`DatabaseTaskDefinitionArn`].OutputValue | [0]' --output text)"
+                    run_database_task drop "$DATABASE_TASK_DEFINITION"
+                    aws cloudformation delete-stack --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME"
+                    aws cloudformation wait stack-delete-complete --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME"
+                    echo "PR ${PR_NUMBER} preview resources and ${SCHEMA_NAME} were removed"
+                  fi
+              finally:
+                - rm -f "$CODEBUILD_SRC_DIR/.codebuild-preview-image-ready"
+      Triggers:
+        Webhook: true
+        BuildType: BUILD
+        FilterGroups:
+          - - Type: EVENT
+              Pattern: PULL_REQUEST_CREATED,PULL_REQUEST_UPDATED,PULL_REQUEST_REOPENED
+            - Type: BASE_REF
+              Pattern: ^refs/heads/master$
+            - Type: FILE_PATH
+              Pattern: >-
+                ^(apps/go-api/|apps/web/|packages/(api|env|preview-environment)/|infra/(go-preview\.yaml|go-foundation\.yaml|go-production\.yaml|codebuild\.yaml)|packages/db/src/(migrations|schema)/).*
+          - - Type: EVENT
+              Pattern: PULL_REQUEST_MERGED,PULL_REQUEST_CLOSED
+            - Type: BASE_REF
+              Pattern: ^refs/heads/master$
+        PullRequestBuildPolicy:
+          RequiresCommentApproval: ALL_PULL_REQUESTS
+          ApproverRoles:
+            - GITHUB_ADMIN
+            - GITHUB_MAINTAIN
+            - GITHUB_WRITE
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_DOCKER_LAYER_CACHE
+          - LOCAL_SOURCE_CACHE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: !Ref CodeBuildImage
+        ComputeType: !Ref ComputeType
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: PROJECT_NAME
+            Type: PLAINTEXT
+            Value: !Ref ProjectName
+          - Name: AWS_ACCOUNT_ID
+            Type: PLAINTEXT
+            Value: !Ref AWS::AccountId
+          - Name: AWS_URL_SUFFIX
+            Type: PLAINTEXT
+            Value: !Ref AWS::URLSuffix
+          - Name: ECR_REPOSITORY_NAME
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryName
+          - Name: ECR_REPOSITORY_URI
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryUri
+          - Name: ECS_CLUSTER_NAME
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: !Sub ${ProjectName}-EcsClusterName
+          - Name: PRIVATE_SUBNET_IDS
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: !Sub ${ProjectName}-PrivateSubnetIds
+          - Name: GO_TASK_SECURITY_GROUP_ID
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: !Sub ${ProjectName}-GoTaskSecurityGroupId
+          - Name: PUBLIC_API_BASE_URL
+            Type: PLAINTEXT
+            Value: !Ref PublicApiBaseUrl
+          - Name: CORS_ORIGINS
+            Type: PLAINTEXT
+            Value: !Ref CorsOrigins
+          - Name: CORS_PREVIEW_ORIGIN_SUFFIX
+            Type: PLAINTEXT
+            Value: .github-account-info.pages.dev
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref PreviewBuildLogGroup
+          StreamName: build
+        S3Logs:
+          Status: DISABLED
+      TimeoutInMinutes: 60
+      QueuedTimeoutInMinutes: 30
+      ConcurrentBuildLimit: 5
+      BadgeEnabled: false
+      Visibility: PRIVATE
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: preview
+        - Key: ManagedBy
+          Value: cloudformation
+
+Outputs:
+  ProductionBuildProjectName:
+    Value: !Ref ProductionBuildProject
+  ProductionBuildProjectArn:
+    Value: !GetAtt ProductionBuildProject.Arn
+  ProductionBuildLogGroupName:
+    Value: !Ref ProductionBuildLogGroup
+  PreviewBuildProjectName:
+    Value: !Ref PreviewBuildProject
+  PreviewBuildProjectArn:
+    Value: !GetAtt PreviewBuildProject.Arn
+  PreviewBuildLogGroupName:
+    Value: !Ref PreviewBuildLogGroup

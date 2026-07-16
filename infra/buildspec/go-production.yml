@@ -1,0 +1,73 @@
+version: 0.2
+
+env:
+  shell: bash
+
+phases:
+  install:
+    commands:
+      - set -euo pipefail
+      - aws --version
+      - docker version
+      - chmod +x infra/scripts/deploy-go-production.sh
+  pre_build:
+    commands:
+      - set -euo pipefail
+      - rm -f "$CODEBUILD_SRC_DIR/.codebuild-production-image-ready"
+      - COMMIT_SHA="$(printf '%s' "$CODEBUILD_RESOLVED_SOURCE_VERSION" | tr '[:upper:]' '[:lower:]')"
+      - '[[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "CODEBUILD_RESOLVED_SOURCE_VERSION must be a full Git SHA" >&2; exit 1; }'
+      - IMAGE_TAG="prod-${COMMIT_SHA}"
+      - IMAGE_URI="${ECR_REPOSITORY_URI}:${IMAGE_TAG}"
+      - GO_BUILDER_IMAGE="$(awk '$1 == "FROM" && $2 ~ /^golang:/ { print $2; exit }' apps/go-api/Dockerfile)"
+      - '[[ "$GO_BUILDER_IMAGE" == *@sha256:* ]] || { echo "Go builder image must be digest-pinned" >&2; exit 1; }'
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.${AWS_URL_SUFFIX:-amazonaws.com}"
+      - docker pull "$GO_BUILDER_IMAGE"
+  build:
+    commands:
+      - set -euo pipefail
+      - >-
+        UNFORMATTED="$(docker run --rm
+        -v "$CODEBUILD_SRC_DIR/apps/go-api:/src:ro"
+        -w /src "$GO_BUILDER_IMAGE"
+        sh -c 'gofmt -l .')"
+      - '[[ -z "$UNFORMATTED" ]] || { printf "Unformatted Go files:\n%s\n" "$UNFORMATTED" >&2; exit 1; }'
+      - >-
+        docker run --rm
+        -v "$CODEBUILD_SRC_DIR/apps/go-api:/src:ro"
+        -v go-mod-cache:/go/pkg/mod
+        -v go-build-cache:/root/.cache/go-build
+        -w /src "$GO_BUILDER_IMAGE" go mod verify
+      - >-
+        docker run --rm
+        -v "$CODEBUILD_SRC_DIR/apps/go-api:/src:ro"
+        -v go-mod-cache:/go/pkg/mod
+        -v go-build-cache:/root/.cache/go-build
+        -w /src "$GO_BUILDER_IMAGE" go vet ./...
+      - >-
+        docker run --rm
+        -v "$CODEBUILD_SRC_DIR/apps/go-api:/src:ro"
+        -v go-mod-cache:/go/pkg/mod
+        -v go-build-cache:/root/.cache/go-build
+        -w /src "$GO_BUILDER_IMAGE" go test ./...
+      - >-
+        DOCKER_BUILDKIT=1 docker build
+        --platform linux/amd64 --pull
+        --tag "$IMAGE_URI"
+        apps/go-api
+      - '[[ "$(docker image inspect --format "{{.Config.User}}" "$IMAGE_URI")" == "65532:65532" ]] || { echo "runtime image is not configured as the expected non-root user" >&2; exit 1; }'
+      - docker push "$IMAGE_URI"
+      - >-
+        aws ecr describe-images
+        --repository-name "$ECR_REPOSITORY_NAME"
+        --image-ids imageTag="$IMAGE_TAG"
+        --query 'imageDetails[0].imageDigest'
+        --output text
+      - touch "$CODEBUILD_SRC_DIR/.codebuild-production-image-ready"
+  post_build:
+    commands:
+      - set -euo pipefail
+      - '[[ "${CODEBUILD_BUILD_SUCCEEDING:-0}" == "1" ]] || { echo "Build failed; production deployment is blocked" >&2; exit 1; }'
+      - '[[ -f "$CODEBUILD_SRC_DIR/.codebuild-production-image-ready" ]] || { echo "Verified image marker is missing; production deployment is blocked" >&2; exit 1; }'
+      - infra/scripts/deploy-go-production.sh "$IMAGE_TAG"
+    finally:
+      - rm -f "$CODEBUILD_SRC_DIR/.codebuild-production-image-ready"

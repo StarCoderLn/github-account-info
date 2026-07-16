@@ -11,6 +11,14 @@
 | 2    | account-records-api    | Drizzle `github_account` 表 + 增删改查 tRPC 接口   | -    | ✅ 已完成 |
 | 3    | account-records-ui     | Token 管理 + 账号信息双页（v2 重构，见下方说明）   | 1, 2 | ✅ 已完成 |
 
+## 平台扩展（2026-07-15）
+
+| 序号 | feature | 说明 | 依赖 | 状态 |
+| --- | --- | --- | --- | --- |
+| 4 | go-profile-platform | Go 个人介绍生成/公开读取 API + ECS/Fargate + Internal ALB + VPC Link + Cloud Map + PR 独立环境 | 1, 2, 3 | 🚧 进行中 |
+
+Feature 4 采用渐进迁移：Node Lambda 保留 GitHub PAT 与账号管理写入；Go 使用已经保存的 GitHub username/账号资料，通过 `template-v1` 规则生成并保存个人介绍，同时提供公开读取。详细需求、设计与任务见 `specs/4.go-profile-platform/`。
+
 **执行顺序**：1、2 并行完成 → 3 依赖 1/2 接口，已完成。
 
 ## 关键决策

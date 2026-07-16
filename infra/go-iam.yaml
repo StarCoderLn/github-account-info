@@ -1,0 +1,625 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Four isolated IAM roles for the github-account-info Go platform:
+  production/preview ECS task execution and production/preview CodeBuild.
+  This stack depends on exports from go-foundation.yaml. Go containers call no
+  AWS APIs and intentionally have no task role.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Naming
+        Parameters:
+          - ProjectName
+      - Label:
+          default: Existing database secrets
+        Parameters:
+          - DatabaseUrlSecretArn
+          - DatabaseSecretKmsKeyArn
+          - PreviewDatabaseUrlSecretArn
+          - PreviewDatabaseSecretKmsKeyArn
+    ParameterLabels:
+      DatabaseUrlSecretArn:
+        default: Production DATABASE_URL Secret ARN
+      PreviewDatabaseUrlSecretArn:
+        default: Preview-only DATABASE_URL Secret ARN
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: github-account-info-go
+    MinLength: 3
+    MaxLength: 22
+    AllowedPattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+  DatabaseUrlSecretArn:
+    Type: String
+    Description: >-
+      ARN of an existing Secrets Manager secret whose entire SecretString is
+      the production PostgreSQL DATABASE_URL. Never pass its value here.
+    AllowedPattern: "^arn:(aws|aws-us-gov|aws-cn):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$"
+  DatabaseSecretKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: >-
+      Leave empty for aws/secretsmanager; otherwise enter the customer-managed
+      KMS key ARN used by the production secret.
+  PreviewDatabaseUrlSecretArn:
+    Type: String
+    Description: >-
+      ARN of the separate preview-only PostgreSQL DATABASE_URL secret.
+    AllowedPattern: "^arn:(aws|aws-us-gov|aws-cn):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$"
+  PreviewDatabaseSecretKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: >-
+      Leave empty for aws/secretsmanager; otherwise enter the customer-managed
+      KMS key ARN used by the preview secret.
+
+Conditions:
+  HasDatabaseSecretKmsKey: !Not
+    - !Equals
+      - !Ref DatabaseSecretKmsKeyArn
+      - ""
+  HasPreviewDatabaseSecretKmsKey: !Not
+    - !Equals
+      - !Ref PreviewDatabaseSecretKmsKeyArn
+      - ""
+
+Resources:
+  EcsTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-execution-role
+      Path: /github-account-info/
+      Description: Pulls the Go image, writes logs, and injects the database secret.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: pull-image-and-write-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EcrAuthorization
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: PullOnlyFromProjectRepository
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource:
+                  Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryArn
+              - Sid: WriteOnlyToProjectLogGroup
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                # AWS::Logs::LogGroup.Arn already ends in `:*`.
+                Resource:
+                  Fn::ImportValue: !Sub ${ProjectName}-EcsLogGroupArn
+        - PolicyName: read-database-secret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadOnlyDatabaseUrlSecret
+                Effect: Allow
+                Action:
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DatabaseUrlSecretArn
+              - !If
+                - HasDatabaseSecretKmsKey
+                - Sid: DecryptDatabaseSecret
+                  Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: !Ref DatabaseSecretKmsKeyArn
+                  Condition:
+                    StringEquals:
+                      kms:ViaService: !Sub secretsmanager.${AWS::Region}.${AWS::URLSuffix}
+                - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Scope
+          Value: shared
+        - Key: ManagedBy
+          Value: cloudformation
+
+  PreviewEcsTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-preview-execution-role
+      Path: /github-account-info/
+      Description: >-
+        Pulls preview images, writes preview logs, and can inject only the
+        preview database secret. It cannot read the production database secret.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: pull-preview-image-and-write-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EcrAuthorization
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: PullOnlyFromProjectRepository
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource:
+                  Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryArn
+              - Sid: WriteOnlyToProjectLogGroup
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  Fn::ImportValue: !Sub ${ProjectName}-EcsLogGroupArn
+        - PolicyName: read-preview-database-secret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadOnlyPreviewDatabaseUrlSecret
+                Effect: Allow
+                Action:
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref PreviewDatabaseUrlSecretArn
+              - !If
+                - HasPreviewDatabaseSecretKmsKey
+                - Sid: DecryptPreviewDatabaseSecret
+                  Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: !Ref PreviewDatabaseSecretKmsKeyArn
+                  Condition:
+                    StringEquals:
+                      kms:ViaService: !Sub secretsmanager.${AWS::Region}.${AWS::URLSuffix}
+                - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: preview
+        - Key: ManagedBy
+          Value: cloudformation
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-production-codebuild-role
+      Path: /github-account-info/
+      Description: Builds immutable production images and deploys only the production stack.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${ProjectName}-production
+      Policies:
+        - PolicyName: build-logs-and-ecr-push
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CreateOnlyProjectBuildLogGroups
+                Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}-production
+              - Sid: WriteOnlyProjectBuildLogStreams
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}-production:log-stream:*
+              - Sid: EcrAuthorization
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: PushOnlyToProjectRepository
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource:
+                  Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryArn
+        - PolicyName: project-stack-deployment
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ValidateTemplates
+                Effect: Allow
+                Action: cloudformation:ValidateTemplate
+                Resource: "*"
+              - Sid: ManageOnlyProductionStack
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:GetTemplate
+                  - cloudformation:UpdateStack
+                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-production/*
+              - Sid: PassOnlyProductionExecutionRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt EcsTaskExecutionRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+              - Sid: RegisterProductionTaskDefinitions
+                Effect: Allow
+                Action:
+                  - ecs:RegisterTaskDefinition
+                  - ecs:TagResource
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/Project: !Ref ProjectName
+                    aws:RequestTag/Environment: production
+              # DescribeTaskDefinition and DeregisterTaskDefinition do not
+              # support resource-level permissions in ECS IAM.
+              - Sid: ReadAndDeregisterTaskDefinitionsForDeployment
+                Effect: Allow
+                Action:
+                  - ecs:DeregisterTaskDefinition
+                  - ecs:DescribeTaskDefinition
+                Resource: "*"
+              - Sid: ReadProjectTaskDefinitionTags
+                Effect: Allow
+                Action: ecs:ListTagsForResource
+                Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${ProjectName}-production:*
+              - Sid: ManageProductionService
+                Effect: Allow
+                Action:
+                  - ecs:CreateService
+                  - ecs:DeleteService
+                  - ecs:DescribeServices
+                  - ecs:TagResource
+                  - ecs:UntagResource
+                  - ecs:UpdateService
+                Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${ProjectName}/${ProjectName}-production
+              - Sid: ObserveProjectTasks
+                Effect: Allow
+                Action:
+                  - ecs:DescribeClusters
+                Resource: "*"
+                Condition:
+                  ArnEquals:
+                    ecs:cluster:
+                      Fn::ImportValue: !Sub ${ProjectName}-EcsClusterArn
+              - Sid: ReadDeploymentNetwork
+                Effect: Allow
+                Action:
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcs
+                Resource: "*"
+              - Sid: ReadDatabaseSecretMetadata
+                Effect: Allow
+                Action: secretsmanager:DescribeSecret
+                Resource: !Ref DatabaseUrlSecretArn
+        - PolicyName: project-load-balancer-deployment
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: DescribeLoadBalancerResources
+                Effect: Allow
+                Action:
+                  - elasticloadbalancing:DescribeListeners
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:DescribeTags
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetHealth
+                Resource: "*"
+              - Sid: CreateTaggedTargetGroups
+                Effect: Allow
+                Action: elasticloadbalancing:CreateTargetGroup
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/Project: !Ref ProjectName
+                    aws:RequestTag/Environment: production
+              - Sid: ManageProjectTargetGroups
+                Effect: Allow
+                Action:
+                  - elasticloadbalancing:AddTags
+                  - elasticloadbalancing:DeleteTargetGroup
+                  - elasticloadbalancing:DeregisterTargets
+                  - elasticloadbalancing:ModifyTargetGroup
+                  - elasticloadbalancing:ModifyTargetGroupAttributes
+                  - elasticloadbalancing:RegisterTargets
+                  - elasticloadbalancing:RemoveTags
+                Resource: !Sub arn:${AWS::Partition}:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/${ProjectName}-prod/*
+              - Sid: ManageRulesOnProjectListener
+                Effect: Allow
+                Action:
+                  - elasticloadbalancing:CreateRule
+                  - elasticloadbalancing:DeleteRule
+                  - elasticloadbalancing:ModifyRule
+                  - elasticloadbalancing:SetRulePriorities
+                Resource:
+                  - Fn::ImportValue: !Sub ${ProjectName}-InternalHttpListenerArn
+                  - !Sub arn:${AWS::Partition}:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:listener-rule/app/${ProjectName}-internal/*/*/*
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+  PreviewCodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-preview-codebuild-role
+      Path: /github-account-info/
+      Description: >-
+        Builds PR images and manages only pr-* CloudFormation, ECS, and ALB
+        resources. It cannot pass the production execution role.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${ProjectName}-preview
+      Policies:
+        - PolicyName: preview-build-logs-and-ecr-push
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CreatePreviewBuildLogGroup
+                Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}-preview
+              - Sid: WritePreviewBuildLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}-preview:log-stream:*
+              - Sid: EcrAuthorization
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: PushOnlyToProjectRepository
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource:
+                  Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryArn
+        - PolicyName: preview-stack-deployment
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ValidateTemplates
+                Effect: Allow
+                Action: cloudformation:ValidateTemplate
+                Resource: "*"
+              - Sid: ManageOnlyPreviewStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:GetTemplate
+                  - cloudformation:UpdateStack
+                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-pr-*/*
+              - Sid: PassOnlyPreviewExecutionRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt PreviewEcsTaskExecutionRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+              - Sid: RegisterPreviewTaskDefinitions
+                Effect: Allow
+                Action:
+                  - ecs:RegisterTaskDefinition
+                  - ecs:TagResource
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/Project: !Ref ProjectName
+                    aws:RequestTag/Environment: preview
+              - Sid: ReadTaskDefinitionsForPreview
+                Effect: Allow
+                Action: ecs:DescribeTaskDefinition
+                Resource: "*"
+              - Sid: ReadPreviewTaskDefinitionTags
+                Effect: Allow
+                Action: ecs:ListTagsForResource
+                Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${ProjectName}-pr-*:*
+              - Sid: ManagePreviewServices
+                Effect: Allow
+                Action:
+                  - ecs:CreateService
+                  - ecs:DeleteService
+                  - ecs:DescribeServices
+                  - ecs:TagResource
+                  - ecs:UntagResource
+                  - ecs:UpdateService
+                Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${ProjectName}/${ProjectName}-pr-*
+              - Sid: RunPreviewDatabaseTasks
+                Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${ProjectName}-pr-*:*
+                Condition:
+                  ArnEquals:
+                    ecs:cluster:
+                      Fn::ImportValue: !Sub ${ProjectName}-EcsClusterArn
+              - Sid: ObservePreviewTasks
+                Effect: Allow
+                Action:
+                  - ecs:DescribeClusters
+                  - ecs:DescribeTasks
+                  - ecs:ListTasks
+                Resource: "*"
+                Condition:
+                  ArnEquals:
+                    ecs:cluster:
+                      Fn::ImportValue: !Sub ${ProjectName}-EcsClusterArn
+              - Sid: ReadDeploymentNetwork
+                Effect: Allow
+                Action:
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcs
+                Resource: "*"
+              - Sid: ReadPreviewDatabaseSecretMetadata
+                Effect: Allow
+                Action: secretsmanager:DescribeSecret
+                Resource: !Ref PreviewDatabaseUrlSecretArn
+        - PolicyName: preview-load-balancer-deployment
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: DescribeLoadBalancerResources
+                Effect: Allow
+                Action:
+                  - elasticloadbalancing:DescribeListeners
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:DescribeTags
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetHealth
+                Resource: "*"
+              - Sid: CreateTaggedPreviewTargetGroups
+                Effect: Allow
+                Action: elasticloadbalancing:CreateTargetGroup
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/Project: !Ref ProjectName
+                    aws:RequestTag/Environment: preview
+              - Sid: ManagePreviewTargetGroups
+                Effect: Allow
+                Action:
+                  - elasticloadbalancing:AddTags
+                  - elasticloadbalancing:DeleteTargetGroup
+                  - elasticloadbalancing:DeregisterTargets
+                  - elasticloadbalancing:ModifyTargetGroup
+                  - elasticloadbalancing:ModifyTargetGroupAttributes
+                  - elasticloadbalancing:RegisterTargets
+                  - elasticloadbalancing:RemoveTags
+                Resource: !Sub arn:${AWS::Partition}:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/${ProjectName}-pr-*/*
+              - Sid: ManagePreviewRulesOnProjectListener
+                Effect: Allow
+                Action:
+                  - elasticloadbalancing:CreateRule
+                  - elasticloadbalancing:DeleteRule
+                  - elasticloadbalancing:ModifyRule
+                  - elasticloadbalancing:SetRulePriorities
+                Resource:
+                  - Fn::ImportValue: !Sub ${ProjectName}-InternalHttpListenerArn
+                  - !Sub arn:${AWS::Partition}:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:listener-rule/app/${ProjectName}-internal/*/*/*
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: preview
+        - Key: ManagedBy
+          Value: cloudformation
+
+Outputs:
+  EcsTaskExecutionRoleArn:
+    Value: !GetAtt EcsTaskExecutionRole.Arn
+    Export:
+      Name: !Sub ${ProjectName}-EcsTaskExecutionRoleArn
+  PreviewEcsTaskExecutionRoleArn:
+    Value: !GetAtt PreviewEcsTaskExecutionRole.Arn
+    Export:
+      Name: !Sub ${ProjectName}-PreviewEcsTaskExecutionRoleArn
+  CodeBuildRoleArn:
+    Value: !GetAtt CodeBuildRole.Arn
+    Export:
+      Name: !Sub ${ProjectName}-CodeBuildRoleArn
+  CodeBuildRoleName:
+    Value: !Ref CodeBuildRole
+    Export:
+      Name: !Sub ${ProjectName}-CodeBuildRoleName
+  PreviewCodeBuildRoleArn:
+    Value: !GetAtt PreviewCodeBuildRole.Arn
+    Export:
+      Name: !Sub ${ProjectName}-PreviewCodeBuildRoleArn
+  PreviewCodeBuildRoleName:
+    Value: !Ref PreviewCodeBuildRole
+    Export:
+      Name: !Sub ${ProjectName}-PreviewCodeBuildRoleName
+  DatabaseUrlSecretArn:
+    Description: Secret ARN only; the secret value is never output.
+    Value: !Ref DatabaseUrlSecretArn
+    Export:
+      Name: !Sub ${ProjectName}-DatabaseUrlSecretArn
+  PreviewDatabaseUrlSecretArn:
+    Description: Preview-only Secret ARN; the secret value is never output.
+    Value: !Ref PreviewDatabaseUrlSecretArn
+    Export:
+      Name: !Sub ${ProjectName}-PreviewDatabaseUrlSecretArn

@@ -9,7 +9,7 @@
 ## 项目信息
 
 - 项目名: github-account-info
-- 架构类型: pnpm + Turborepo monorepo（Drizzle + Neon Postgres / tRPC）
+- 架构类型: pnpm + Turborepo monorepo（Drizzle + 标准 PostgreSQL / tRPC；当前 production 为 Amazon RDS）
 - specs 路径: specs/2.account-records-api/
 
 ## 任务列表
@@ -39,6 +39,6 @@
 
 ## 风险点
 
-- Neon serverless 需有效 `DATABASE_URL`；`db:push`/`migrate` 前确认 `apps/server/.env`。
+- PostgreSQL 操作需有效 `DATABASE_URL`；`db:push`/`migrate` 前确认 `apps/server/.env`，production 连接目标为 Amazon RDS。
 - 唯一冲突错误码因驱动而异，捕获时按 `error.code`/message 兜底转 `CONFLICT`。
 - `schema/index.ts` 当前是 `export {}`，改导出时勿遗漏其它已有导出。

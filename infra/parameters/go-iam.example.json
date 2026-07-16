@@ -1,0 +1,10 @@
+[
+  {
+    "ParameterKey": "DatabaseUrlSecretArn",
+    "ParameterValue": "arn:aws:secretsmanager:us-east-2:000000000000:secret:REPLACE_PRODUCTION"
+  },
+  {
+    "ParameterKey": "PreviewDatabaseUrlSecretArn",
+    "ParameterValue": "arn:aws:secretsmanager:us-east-2:000000000000:secret:REPLACE_PREVIEW_ONLY"
+  }
+]

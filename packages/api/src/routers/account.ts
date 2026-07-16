@@ -7,7 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { publicProcedure, router } from "../index";
+import { managementProcedure, router } from "../index";
 
 function isUniqueConstraintError(err: unknown): boolean {
 	return (
@@ -20,7 +20,7 @@ function isUniqueConstraintError(err: unknown): boolean {
 
 export const accountRouter = router({
 	// T-003: list — 按 updatedAt 倒序
-	list: publicProcedure.query(async ({ ctx }) => {
+	list: managementProcedure.query(async ({ ctx }) => {
 		return ctx.db
 			.select()
 			.from(githubAccount)
@@ -28,7 +28,7 @@ export const accountRouter = router({
 	}),
 
 	// T-004: create — zod 校验 + 唯一冲突 → CONFLICT
-	create: publicProcedure
+	create: managementProcedure
 		.input(githubAccountInsertSchema)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -52,7 +52,7 @@ export const accountRouter = router({
 		}),
 
 	// T-005: update — 按 id 更新，刷新 updatedAt，未命中 → NOT_FOUND
-	update: publicProcedure
+	update: managementProcedure
 		.input(githubAccountUpdateSchema)
 		.mutation(async ({ input, ctx }) => {
 			const { id, ...data } = input;
@@ -85,7 +85,7 @@ export const accountRouter = router({
 		}),
 
 	// T-006: delete — 按 id 删除
-	delete: publicProcedure
+	delete: managementProcedure
 		.input(z.object({ id: z.number().int() }))
 		.mutation(async ({ input, ctx }) => {
 			await ctx.db.delete(githubAccount).where(eq(githubAccount.id, input.id));
@@ -93,7 +93,7 @@ export const accountRouter = router({
 		}),
 
 	// T-007: upsert — 按 githubId 冲突时更新
-	upsert: publicProcedure
+	upsert: managementProcedure
 		.input(githubAccountInsertSchema)
 		.mutation(async ({ input, ctx }) => {
 			const [row] = await ctx.db

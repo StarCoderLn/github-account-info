@@ -13,6 +13,7 @@ export const queryClient = new QueryClient({
 	},
 	queryCache: new QueryCache({
 		onError: (error, query) => {
+			if (query.meta?.suppressGlobalErrorToast === true) return;
 			toast.error(error.message, {
 				action: {
 					label: "retry",

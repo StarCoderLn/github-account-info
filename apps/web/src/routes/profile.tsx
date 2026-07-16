@@ -1,3 +1,13 @@
+import { Button } from "@github-account-info/ui/components/button";
+import {
+	Card,
+	CardAction,
+	CardContent,
+	CardDescription,
+	CardFooter,
+	CardHeader,
+	CardTitle,
+} from "@github-account-info/ui/components/card";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
@@ -5,12 +15,19 @@ import {
 	AtSign,
 	BookOpen,
 	ExternalLink,
+	Eye,
+	FileText,
 	RefreshCw,
 	Save,
 	Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import {
+	introductionQueryKey,
+	PublicIntroductionApiError,
+	publicIntroductionQueryOptions,
+} from "@/utils/introduction-api";
 import { getSelectedToken } from "@/utils/token-store";
 import { trpc } from "@/utils/trpc";
 
@@ -44,6 +61,7 @@ function ProfilePage() {
 	const fetchMut = useMutation(trpc.github.getAccount.mutationOptions());
 	const createMut = useMutation(trpc.account.create.mutationOptions());
 	const updateMut = useMutation(trpc.account.update.mutationOptions());
+	const generateMut = useMutation(trpc.introduction.generate.mutationOptions());
 	const queryClient = useQueryClient();
 	const listQuery = useQuery(trpc.account.list.queryOptions());
 
@@ -52,10 +70,17 @@ function ProfilePage() {
 
 	const dbRecord =
 		listQuery.data?.find((r) => r.login === selectedToken?.login) ?? null;
+	const selectedTokenId = selectedToken?.id;
+	const selectedTokenValue = selectedToken?.token;
+	const introductionQuery = useQuery(
+		publicIntroductionQueryOptions(dbRecord?.login ?? "", {
+			enabled: Boolean(dbRecord?.login),
+		}),
+	);
 
 	// Load data: DB record takes priority; fall back to GitHub fetch
 	useEffect(() => {
-		if (!selectedToken || listQuery.isPending) return;
+		if (!selectedTokenId || !selectedTokenValue || listQuery.isPending) return;
 
 		if (dbRecord) {
 			setForm({
@@ -74,35 +99,48 @@ function ProfilePage() {
 				following: dbRecord.following,
 			});
 			setReady(true);
-		} else {
-			fetchMut
-				.mutateAsync({ token: selectedToken.token })
-				.then((acc) => {
-					setForm({
-						login: acc.login,
-						githubId: acc.githubId,
-						name: acc.name ?? "",
-						bio: acc.bio ?? "",
-						company: acc.company ?? "",
-						location: acc.location ?? "",
-						email: acc.email ?? "",
-						blog: acc.blog ?? "",
-						twitterUsername: acc.twitterUsername ?? "",
-						avatarUrl: acc.avatarUrl ?? "",
-						publicRepos: acc.publicRepos,
-						followers: acc.followers,
-						following: acc.following,
-					});
-					setReady(true);
-				})
-				.catch((err) => {
-					toast.error(
-						err instanceof Error ? err.message : "拉取 GitHub 信息失败",
-					);
-				});
+			return;
 		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [selectedToken?.id, listQuery.isPending]);
+
+		let cancelled = false;
+		fetchMut
+			.mutateAsync({ token: selectedTokenValue })
+			.then((acc) => {
+				if (cancelled) return;
+				setForm({
+					login: acc.login,
+					githubId: acc.githubId,
+					name: acc.name ?? "",
+					bio: acc.bio ?? "",
+					company: acc.company ?? "",
+					location: acc.location ?? "",
+					email: acc.email ?? "",
+					blog: acc.blog ?? "",
+					twitterUsername: acc.twitterUsername ?? "",
+					avatarUrl: acc.avatarUrl ?? "",
+					publicRepos: acc.publicRepos,
+					followers: acc.followers,
+					following: acc.following,
+				});
+				setReady(true);
+			})
+			.catch((err) => {
+				if (cancelled) return;
+				toast.error(
+					err instanceof Error ? err.message : "拉取 GitHub 信息失败",
+				);
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [
+		dbRecord,
+		fetchMut.mutateAsync,
+		listQuery.isPending,
+		selectedTokenId,
+		selectedTokenValue,
+	]);
 
 	// Refresh from GitHub (manual)
 	const handleRefresh = async () => {
@@ -154,9 +192,34 @@ function ProfilePage() {
 				await createMut.mutateAsync(payload);
 				toast.success("账号信息已保存到数据库");
 			}
-			queryClient.invalidateQueries(trpc.account.list.queryFilter());
+			await queryClient.invalidateQueries(trpc.account.list.queryFilter());
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "保存失败");
+		}
+	};
+
+	const handleGenerateIntroduction = async () => {
+		if (!dbRecord) {
+			toast.error("请先把账号信息保存到数据库");
+			return;
+		}
+
+		try {
+			const result = await generateMut.mutateAsync({
+				githubUsername: dbRecord.login,
+				regenerate: Boolean(introductionQuery.data),
+			});
+			queryClient.setQueryData(
+				introductionQueryKey(result.introduction.githubUsername),
+				result.introduction,
+			);
+			toast.success(
+				result.generated
+					? "个人介绍已生成并发布"
+					: "账号资料没有变化，现有个人介绍仍是最新版本",
+			);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "生成个人介绍失败");
 		}
 	};
 
@@ -246,6 +309,7 @@ function ProfilePage() {
 
 				<div className="grid gap-4">
 					<Field
+						id="profile-name"
 						label="姓名"
 						value={form.name}
 						onChange={set("name")}
@@ -253,8 +317,11 @@ function ProfilePage() {
 					/>
 
 					<div className="flex flex-col gap-1.5">
-						<label className="text-gray-600 text-sm">简介</label>
+						<label htmlFor="profile-bio" className="text-gray-600 text-sm">
+							简介
+						</label>
 						<textarea
+							id="profile-bio"
 							value={form.bio}
 							onChange={set("bio")}
 							placeholder="Tell us about yourself"
@@ -265,12 +332,14 @@ function ProfilePage() {
 
 					<div className="grid grid-cols-2 gap-4">
 						<Field
+							id="profile-company"
 							label="公司"
 							value={form.company}
 							onChange={set("company")}
 							placeholder="Company"
 						/>
 						<Field
+							id="profile-location"
 							label="地址"
 							value={form.location}
 							onChange={set("location")}
@@ -279,6 +348,7 @@ function ProfilePage() {
 					</div>
 
 					<Field
+						id="profile-email"
 						label="邮箱"
 						value={form.email}
 						onChange={set("email")}
@@ -288,11 +358,15 @@ function ProfilePage() {
 
 					<div className="grid grid-cols-2 gap-4">
 						<div className="flex flex-col gap-1.5">
-							<label className="flex items-center gap-1 text-gray-600 text-sm">
+							<label
+								htmlFor="profile-blog"
+								className="flex items-center gap-1 text-gray-600 text-sm"
+							>
 								<ExternalLink className="h-3.5 w-3.5" />
 								博客 URL
 							</label>
 							<input
+								id="profile-blog"
 								type="url"
 								value={form.blog}
 								onChange={set("blog")}
@@ -301,11 +375,15 @@ function ProfilePage() {
 							/>
 						</div>
 						<div className="flex flex-col gap-1.5">
-							<label className="flex items-center gap-1 text-gray-600 text-sm">
+							<label
+								htmlFor="profile-twitter"
+								className="flex items-center gap-1 text-gray-600 text-sm"
+							>
 								<AtSign className="h-3.5 w-3.5" />
 								Twitter
 							</label>
 							<input
+								id="profile-twitter"
 								type="text"
 								value={form.twitterUsername}
 								onChange={set("twitterUsername")}
@@ -348,17 +426,133 @@ function ProfilePage() {
 					</button>
 				</div>
 			</div>
+
+			<Card>
+				<CardHeader>
+					<CardTitle>公开个人介绍</CardTitle>
+					<CardDescription>
+						Go 服务会使用已经保存的 GitHub username 和账号资料生成介绍，不会接收
+						GitHub Token。
+					</CardDescription>
+					{introductionQuery.data ? (
+						<CardAction>
+							<Button
+								variant="outline"
+								size="sm"
+								render={
+									<Link
+										to="/u/$username"
+										params={{
+											username: introductionQuery.data.githubUsername,
+										}}
+									/>
+								}
+							>
+								<Eye data-icon="inline-start" />
+								查看公开页面
+							</Button>
+						</CardAction>
+					) : null}
+				</CardHeader>
+				<CardContent>
+					<IntroductionStatus
+						hasStoredAccount={Boolean(dbRecord)}
+						isGenerating={generateMut.isPending}
+						isLoading={introductionQuery.isPending && Boolean(dbRecord)}
+						introduction={introductionQuery.data?.introduction}
+						error={introductionQuery.error}
+					/>
+				</CardContent>
+				<CardFooter className="justify-end">
+					<Button
+						onClick={handleGenerateIntroduction}
+						disabled={!dbRecord || generateMut.isPending}
+					>
+						{introductionQuery.data ? (
+							<RefreshCw
+								data-icon="inline-start"
+								className={generateMut.isPending ? "animate-spin" : undefined}
+							/>
+						) : (
+							<FileText data-icon="inline-start" />
+						)}
+						{generateMut.isPending
+							? "生成中…"
+							: introductionQuery.data
+								? "重新生成个人介绍"
+								: "生成个人介绍"}
+					</Button>
+				</CardFooter>
+			</Card>
 		</div>
 	);
 }
 
+function IntroductionStatus({
+	hasStoredAccount,
+	isGenerating,
+	isLoading,
+	introduction,
+	error,
+}: {
+	hasStoredAccount: boolean;
+	isGenerating: boolean;
+	isLoading: boolean;
+	introduction: string | undefined;
+	error: Error | null;
+}) {
+	if (!hasStoredAccount) {
+		return (
+			<p className="text-muted-foreground">
+				请先保存账号资料，再生成个人介绍。
+			</p>
+		);
+	}
+	if (isGenerating) {
+		return (
+			<p className="text-muted-foreground">
+				正在根据已保存的账号资料生成个人介绍…
+			</p>
+		);
+	}
+	if (isLoading) {
+		return (
+			<p className="text-muted-foreground">正在检查是否已经生成个人介绍…</p>
+		);
+	}
+	if (introduction) {
+		return (
+			<p className="line-clamp-3 whitespace-pre-wrap text-sm/relaxed">
+				{introduction}
+			</p>
+		);
+	}
+	if (
+		error instanceof PublicIntroductionApiError &&
+		error.status === 404 &&
+		error.code === "introduction_not_found"
+	) {
+		return <p className="text-muted-foreground">尚未生成个人介绍。</p>;
+	}
+	if (error) {
+		return (
+			<p className="text-muted-foreground">
+				暂时无法读取生成状态，但仍可尝试生成。
+			</p>
+		);
+	}
+	return <p className="text-muted-foreground">尚未生成个人介绍。</p>;
+}
+
 function Field({
+	id,
 	label,
 	value,
 	onChange,
 	type = "text",
 	placeholder,
 }: {
+	id: string;
 	label: string;
 	value: string;
 	onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -367,8 +561,11 @@ function Field({
 }) {
 	return (
 		<div className="flex flex-col gap-1.5">
-			<label className="text-gray-600 text-sm">{label}</label>
+			<label htmlFor={id} className="text-gray-600 text-sm">
+				{label}
+			</label>
 			<input
+				id={id}
 				type={type}
 				value={value}
 				onChange={onChange}

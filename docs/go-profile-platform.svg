@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1040" font-family="Inter,'PingFang SC','Microsoft YaHei',Arial,sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#334155"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#ea580c"/>
+    </marker>
+    <style>
+      .box{fill:#fff;stroke:#475569;stroke-width:1.6}.aws{fill:#fffaf5;stroke:#ea580c}.cf{fill:#fff7ed;stroke:#f97316}.go{fill:#eff6ff;stroke:#2563eb}.node{fill:#f0fdf4;stroke:#16a34a}.db{fill:#faf5ff;stroke:#9333ea}.ci{fill:#f8fafc;stroke:#64748b}.preview{fill:#f5f3ff;stroke:#7c3aed}.label{font-size:14px;fill:#334155}.small{font-size:12px;fill:#64748b}.title{font-size:17px;font-weight:700;fill:#0f172a}.section{font-size:19px;font-weight:700;fill:#0f172a}.line{fill:none;stroke:#334155;stroke-width:2;marker-end:url(#arrow)}.blue{stroke:#2563eb;marker-end:url(#arrowBlue)}.orange{stroke:#ea580c;marker-end:url(#arrowOrange)}.dash{stroke-dasharray:7 5}.pill{fill:#f1f5f9;stroke:#cbd5e1}.mono{font-family:Menlo,Consolas,monospace}
+    </style>
+  </defs>
+
+  <rect width="1600" height="1040" fill="#ffffff"/>
+  <text x="44" y="48" font-size="28" font-weight="800" fill="#0f172a">github-account-info · Go 个人介绍平台</text>
+  <text x="44" y="76" font-size="14" fill="#475569">无登录认证 · 复用已保存的 GitHub username/账号资料 · Go 规则模板生成介绍（暂不调用 AI）</text>
+  <line x1="44" y1="96" x2="1556" y2="96" stroke="#e2e8f0"/>
+
+  <text x="44" y="132" class="section">运行时请求</text>
+  <rect x="44" y="154" width="1512" height="548" rx="16" fill="#fbfdff" stroke="#cbd5e1" stroke-width="1.5"/>
+
+  <rect x="72" y="210" width="160" height="84" rx="12" class="box"/>
+  <text x="152" y="244" text-anchor="middle" class="title">用户浏览器</text>
+  <text x="152" y="269" text-anchor="middle" class="small">公开 /u/:username</text>
+
+  <rect x="284" y="190" width="210" height="124" rx="12" class="box cf"/>
+  <text x="389" y="224" text-anchor="middle" class="title">Cloudflare Pages</text>
+  <text x="389" y="250" text-anchor="middle" class="label">React + Vite SPA</text>
+  <text x="389" y="275" text-anchor="middle" class="small">production / PR Preview</text>
+  <text x="389" y="296" text-anchor="middle" class="small mono">preview-&lt;head-sha12&gt;</text>
+
+  <rect x="548" y="190" width="194" height="124" rx="12" class="box aws"/>
+  <text x="645" y="224" text-anchor="middle" class="title">API Gateway</text>
+  <text x="645" y="250" text-anchor="middle" class="small mono">/trpc/* → Lambda</text>
+  <text x="645" y="273" text-anchor="middle" class="small mono">/api/v1/* → VPC Link</text>
+  <text x="645" y="296" text-anchor="middle" class="small">无 /internal 公网路由</text>
+
+  <rect x="798" y="140" width="728" height="526" rx="16" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.6"/>
+  <text x="824" y="174" class="title">AWS us-east-2 · VPC</text>
+
+  <rect x="828" y="204" width="220" height="116" rx="12" class="box node"/>
+  <text x="938" y="236" text-anchor="middle" class="title">Node Lambda</text>
+  <text x="938" y="261" text-anchor="middle" class="label">Hono + tRPC</text>
+  <text x="938" y="285" text-anchor="middle" class="small">管理写入 / 生成入口</text>
+  <text x="938" y="305" text-anchor="middle" class="small">Cloudflare Access 边界</text>
+
+  <rect x="828" y="372" width="140" height="86" rx="12" class="box aws"/>
+  <text x="898" y="405" text-anchor="middle" class="title">VPC Link</text>
+  <text x="898" y="431" text-anchor="middle" class="small">private integration</text>
+
+  <rect x="1010" y="372" width="174" height="86" rx="12" class="box aws"/>
+  <text x="1097" y="405" text-anchor="middle" class="title">Internal ALB</text>
+  <text x="1097" y="431" text-anchor="middle" class="small">path + preview header</text>
+
+  <rect x="1228" y="344" width="264" height="126" rx="12" class="box go"/>
+  <text x="1360" y="377" text-anchor="middle" class="title">Go API · ECS/Fargate</text>
+  <text x="1360" y="402" text-anchor="middle" class="label">production Service</text>
+  <text x="1360" y="426" text-anchor="middle" class="small">公开读取 + 内部生成</text>
+  <text x="1360" y="449" text-anchor="middle" class="small">Cloud Map 注册 production task</text>
+
+  <rect x="828" y="518" width="154" height="92" rx="12" class="box aws"/>
+  <text x="905" y="553" text-anchor="middle" class="title">Cloud Map</text>
+  <text x="905" y="577" text-anchor="middle" class="small mono">go-api.*.local</text>
+  <text x="905" y="597" text-anchor="middle" class="small">仅 production</text>
+
+  <rect x="1028" y="508" width="202" height="112" rx="12" class="box db"/>
+  <text x="1129" y="542" text-anchor="middle" class="title">RDS PostgreSQL</text>
+  <text x="1129" y="568" text-anchor="middle" class="label">production database</text>
+  <text x="1129" y="592" text-anchor="middle" class="small">独立 production Secret</text>
+
+  <rect x="1272" y="508" width="220" height="112" rx="12" class="box preview"/>
+  <text x="1382" y="540" text-anchor="middle" class="title">Preview database</text>
+  <text x="1382" y="566" text-anchor="middle" class="small">同一 RDS 实例 / 独立凭证</text>
+  <text x="1382" y="590" text-anchor="middle" class="small mono">pr_123 · pr_456 · …</text>
+
+  <path d="M232 252H284" class="line"/>
+  <path d="M494 252H548" class="line"/>
+  <path d="M742 226H828" class="line"/>
+  <text x="780" y="214" text-anchor="middle" class="small">tRPC</text>
+  <path d="M742 276C780 276 790 415 828 415" class="line blue"/>
+  <text x="785" y="352" text-anchor="middle" class="small">Go GET</text>
+  <path d="M968 415H1010" class="line blue"/>
+  <path d="M1184 415H1228" class="line blue"/>
+  <path d="M938 320V476H905V518" class="line"/>
+  <path d="M982 564C1060 564 1140 470 1272 430" class="line"/>
+  <text x="1088" y="506" text-anchor="middle" class="small">private POST /internal/v1</text>
+  <path d="M1048 280C1100 280 1090 508 1090 508" class="line"/>
+  <path d="M1320 470C1260 500 1220 540 1230 564" class="line"/>
+  <path d="M1360 470V508" class="line"/>
+
+  <rect x="72" y="350" width="628" height="296" rx="14" fill="#f5f3ff" stroke="#7c3aed" stroke-dasharray="7 5"/>
+  <text x="94" y="382" class="title">PR 独立后端（已审批协作者）</text>
+  <rect x="100" y="410" width="220" height="96" rx="11" class="box preview"/>
+  <text x="210" y="442" text-anchor="middle" class="title">Header Listener Rule</text>
+  <text x="210" y="467" text-anchor="middle" class="small mono">X-Preview-Environment</text>
+  <text x="210" y="488" text-anchor="middle" class="small mono">preview-&lt;sha12&gt;</text>
+  <rect x="366" y="410" width="258" height="96" rx="11" class="box go"/>
+  <text x="495" y="442" text-anchor="middle" class="title">PR ECS Service</text>
+  <text x="495" y="467" text-anchor="middle" class="label">Fargate Spot · 1 task</text>
+  <text x="495" y="489" text-anchor="middle" class="small">不注册 production Cloud Map</text>
+  <text x="100" y="544" class="label">流量：Cloudflare Preview → API Gateway → VPC Link → Internal ALB</text>
+  <text x="100" y="574" class="label">数据：独立 preview credential → 对应 pr_&lt;number&gt; schema</text>
+  <text x="100" y="604" class="small">header 只负责路由，不是认证；production Secret 与数据对 Preview Role/Task 不可见</text>
+  <path d="M320 458H366" class="line blue"/>
+  <path d="M624 458C682 458 720 420 798 420" class="line blue dash"/>
+
+  <text x="44" y="746" class="section">构建、部署与清理</text>
+  <rect x="44" y="770" width="1512" height="226" rx="16" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+
+  <rect x="72" y="818" width="154" height="86" rx="11" class="box ci"/>
+  <text x="149" y="851" text-anchor="middle" class="title">GitHub</text>
+  <text x="149" y="876" text-anchor="middle" class="small">master / Pull Request</text>
+
+  <rect x="280" y="798" width="230" height="70" rx="11" class="box node"/>
+  <text x="395" y="827" text-anchor="middle" class="title">GitHub Actions</text>
+  <text x="395" y="850" text-anchor="middle" class="small">Node Lambda · SAM deploy</text>
+
+  <rect x="280" y="892" width="230" height="70" rx="11" class="box cf"/>
+  <text x="395" y="921" text-anchor="middle" class="title">Cloudflare Build</text>
+  <text x="395" y="944" text-anchor="middle" class="small">production / Preview SPA</text>
+
+  <rect x="570" y="798" width="238" height="70" rx="11" class="box aws"/>
+  <text x="689" y="827" text-anchor="middle" class="title">Production CodeBuild</text>
+  <text x="689" y="850" text-anchor="middle" class="small">test → ECR → stable ECS</text>
+
+  <rect x="570" y="892" width="238" height="70" rx="11" class="box preview"/>
+  <text x="689" y="921" text-anchor="middle" class="title">Preview CodeBuild</text>
+  <text x="689" y="944" text-anchor="middle" class="small">PR approval → per-PR stack</text>
+
+  <rect x="868" y="818" width="166" height="86" rx="11" class="box aws"/>
+  <text x="951" y="851" text-anchor="middle" class="title">ECR</text>
+  <text x="951" y="876" text-anchor="middle" class="small">immutable SHA tags</text>
+
+  <rect x="1088" y="798" width="208" height="164" rx="11" class="box ci"/>
+  <text x="1192" y="827" text-anchor="middle" class="title">四个项目角色</text>
+  <text x="1110" y="854" class="small">1. production CodeBuild</text>
+  <text x="1110" y="877" class="small">2. preview CodeBuild</text>
+  <text x="1110" y="900" class="small">3. production Execution</text>
+  <text x="1110" y="923" class="small">4. preview Execution</text>
+  <text x="1110" y="946" class="small">Go 无 Task Role</text>
+
+  <rect x="1350" y="818" width="174" height="86" rx="11" class="box ci"/>
+  <text x="1437" y="851" text-anchor="middle" class="title">CloudWatch</text>
+  <text x="1437" y="876" text-anchor="middle" class="small">ALB · ECS · API 告警</text>
+
+  <path d="M226 842H280" class="line dash"/>
+  <path d="M226 880C250 880 250 927 280 927" class="line orange dash"/>
+  <path d="M510 833H570" class="line dash"/>
+  <path d="M510 927H570" class="line orange dash"/>
+  <path d="M808 833H868" class="line dash"/>
+  <path d="M808 927C842 927 840 876 868 876" class="line orange dash"/>
+  <path d="M1034 861H1088" class="line dash"/>
+  <path d="M1296 861H1350" class="line dash"/>
+
+  <rect x="1332" y="922" width="206" height="54" rx="10" class="pill"/>
+  <text x="1435" y="944" text-anchor="middle" class="small">PR close/merge：rule/service</text>
+  <text x="1435" y="963" text-anchor="middle" class="small">→ schema → stack 清理</text>
+
+  <text x="44" y="1022" class="small">实线：运行时请求　虚线：构建/部署　蓝色：Go 公网读取链路　橙色：PR Preview 链路　IaC：CloudFormation/SAM</text>
+</svg>

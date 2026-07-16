@@ -7,7 +7,7 @@
 ## 项目信息
 
 - 项目名: github-account-info
-- 架构类型: pnpm + Turborepo monorepo（packages/db = Drizzle + Neon Postgres，packages/api = tRPC）
+- 架构类型: pnpm + Turborepo monorepo（packages/db = Drizzle + 标准 PostgreSQL，packages/api = tRPC；当前 production 为 Amazon RDS）
 
 ## 需求版本
 
@@ -32,7 +32,7 @@
 
 - 性能: 列表数据量小（个人使用），单表查询即可，无需分页（可后续扩展）。
 - 安全: 仅存储公开账户信息，**不存储 token**；写操作做入参白名单，避免越权写入未定义字段。
-- 兼容性: Drizzle ORM + Neon Serverless Postgres（现有 `packages/db` 配置）。
+- 兼容性: Drizzle ORM + `pg`/标准 PostgreSQL；production 使用 Amazon RDS。项目最初脚手架选择过 Neon，后续迁移记录见 `docs/deployment-lessons.md`。
 
 ## 验收标准
 

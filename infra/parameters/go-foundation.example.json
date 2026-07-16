@@ -1,0 +1,18 @@
+[
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-REPLACE_ME"
+  },
+  {
+    "ParameterKey": "PrivateSubnetIds",
+    "ParameterValue": "subnet-REPLACE_A,subnet-REPLACE_B"
+  },
+  {
+    "ParameterKey": "LambdaSecurityGroupId",
+    "ParameterValue": "sg-REPLACE_LAMBDA"
+  },
+  {
+    "ParameterKey": "RdsSecurityGroupId",
+    "ParameterValue": "sg-REPLACE_RDS"
+  }
+]

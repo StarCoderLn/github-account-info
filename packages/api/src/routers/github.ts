@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
-import { publicProcedure, router } from "../index";
+import { managementProcedure, router } from "../index";
 import {
 	fetchGithubAccount,
 	GithubAuthError,
@@ -11,7 +11,7 @@ import {
 } from "../services/github";
 
 export const githubRouter = router({
-	getAccount: publicProcedure
+	getAccount: managementProcedure
 		.input(z.object({ token: z.string().trim().min(1, "token 不能为空") }))
 		.output(githubAccountSchema)
 		.mutation(async ({ input }) => {

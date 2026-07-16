@@ -1,0 +1,313 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  One isolated pull-request runtime for the github-account-info Go API. Reuses
+  shared foundation resources but owns its ECS service, target group, listener
+  rule, task definitions, and pr_<number> database schema lifecycle task.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Pull request identity
+        Parameters:
+          - ProjectName
+          - PRNumber
+          - PreviewKey
+          - ImageTag
+          - ExpiresAt
+      - Label:
+          default: Runtime lifecycle
+        Parameters:
+          - DesiredCount
+          - RoutingEnabled
+          - CorsOrigins
+          - CorsPreviewOriginSuffix
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: github-account-info-go
+    MinLength: 3
+    MaxLength: 22
+    AllowedPattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+  PRNumber:
+    Type: Number
+    MinValue: 1
+    MaxValue: 49999
+    Description: Also used as the unique ALB listener priority.
+  PreviewKey:
+    Type: String
+    AllowedPattern: "^preview-[0-9a-f]{12}$"
+    Description: Derived from the full head commit SHA by the shared preview-key module.
+  ImageTag:
+    Type: String
+    AllowedPattern: "^pr-[1-9][0-9]{0,4}-[0-9a-f]{40}$"
+    Description: Immutable pr-<number>-<full-lowercase-commit-sha> ECR tag.
+  ExpiresAt:
+    Type: String
+    AllowedPattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    Description: UTC TTL tag used by the stage-11 cleanup fallback.
+  DesiredCount:
+    Type: Number
+    Default: 1
+    AllowedValues:
+      - 0
+      - 1
+  RoutingEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Set false together with DesiredCount=0 before schema cleanup.
+  CorsOrigins:
+    Type: String
+    Default: https://github-account-info.pages.dev
+    MinLength: 8
+    MaxLength: 1024
+  CorsPreviewOriginSuffix:
+    Type: String
+    Default: .github-account-info.pages.dev
+    AllowedPattern: '^\.[a-z0-9][a-z0-9.-]*[a-z0-9]$'
+
+Conditions:
+  CreateRouting: !Equals
+    - !Ref RoutingEnabled
+    - "true"
+
+Resources:
+  PreviewTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Family: !Sub ${ProjectName}-pr-${PRNumber}
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: "256"
+      Memory: "512"
+      ExecutionRoleArn:
+        Fn::ImportValue: !Sub ${ProjectName}-PreviewEcsTaskExecutionRoleArn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: go-api
+          Essential: true
+          Image: !Join
+            - ":"
+            - - Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryUri
+              - !Ref ImageTag
+          User: "65532:65532"
+          ReadonlyRootFilesystem: true
+          StopTimeout: 15
+          PortMappings:
+            - Name: http
+              ContainerPort: 8080
+              Protocol: tcp
+              AppProtocol: http
+          Environment:
+            - Name: APP_ENV
+              Value: production
+            - Name: PORT
+              Value: "8080"
+            - Name: DB_SCHEMA
+              Value: !Sub pr_${PRNumber}
+            - Name: RDS_CA_BUNDLE
+              Value: /etc/ssl/certs/rds-us-east-2-bundle.pem
+            - Name: CORS_ORIGINS
+              Value: !Ref CorsOrigins
+            - Name: CORS_PREVIEW_ORIGIN_SUFFIX
+              Value: !Ref CorsPreviewOriginSuffix
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom:
+                Fn::ImportValue: !Sub ${ProjectName}-PreviewDatabaseUrlSecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub ${ProjectName}-EcsLogGroupName
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Sub pr-${PRNumber}
+              mode: non-blocking
+              max-buffer-size: 4m
+          DockerLabels:
+            com.github-account-info.project: !Ref ProjectName
+            com.github-account-info.environment: preview
+            com.github-account-info.pr-number: !Ref PRNumber
+      Tags: &PreviewTags
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: preview
+        - Key: PRNumber
+          Value: !Ref PRNumber
+        - Key: PreviewKey
+          Value: !Ref PreviewKey
+        - Key: ImageTag
+          Value: !Ref ImageTag
+        - Key: ExpiresAt
+          Value: !Ref ExpiresAt
+        - Key: ManagedBy
+          Value: cloudformation
+
+  PreviewDatabaseTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Family: !Sub ${ProjectName}-pr-${PRNumber}-db
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: "256"
+      Memory: "512"
+      ExecutionRoleArn:
+        Fn::ImportValue: !Sub ${ProjectName}-PreviewEcsTaskExecutionRoleArn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: preview-db
+          Essential: true
+          Image: !Join
+            - ":"
+            - - Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryUri
+              - !Ref ImageTag
+          EntryPoint:
+            - /preview-db
+          Command:
+            - create
+            - --pr-number
+            - !Ref PRNumber
+          User: "65532:65532"
+          ReadonlyRootFilesystem: true
+          Environment:
+            - Name: RDS_CA_BUNDLE
+              Value: /etc/ssl/certs/rds-us-east-2-bundle.pem
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom:
+                Fn::ImportValue: !Sub ${ProjectName}-PreviewDatabaseUrlSecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub ${ProjectName}-EcsLogGroupName
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Sub pr-${PRNumber}-db
+              mode: non-blocking
+              max-buffer-size: 4m
+      Tags: *PreviewTags
+
+  PreviewTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ProjectName}-pr-${PRNumber}
+      VpcId:
+        Fn::ImportValue: !Sub ${ProjectName}-VpcId
+      Protocol: HTTP
+      ProtocolVersion: HTTP1
+      Port: 8080
+      TargetType: ip
+      IpAddressType: ipv4
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: traffic-port
+      HealthCheckPath: /healthz
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "15"
+        - Key: stickiness.enabled
+          Value: "false"
+      Tags: *PreviewTags
+
+  PreviewListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: CreateRouting
+    Properties:
+      ListenerArn:
+        Fn::ImportValue: !Sub ${ProjectName}-InternalHttpListenerArn
+      Priority: !Ref PRNumber
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: X-Preview-Environment
+            Values:
+              - !Ref PreviewKey
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - /api/v1/*
+              - /healthz
+              - /readyz
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref PreviewTargetGroup
+
+  PreviewService:
+    Type: AWS::ECS::Service
+    Condition: CreateRouting
+    DependsOn:
+      - PreviewListenerRule
+    Properties:
+      ServiceName: !Sub ${ProjectName}-pr-${PRNumber}
+      Cluster:
+        Fn::ImportValue: !Sub ${ProjectName}-EcsClusterArn
+      TaskDefinition: !Ref PreviewTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      PlatformVersion: LATEST
+      SchedulingStrategy: REPLICA
+      AvailabilityZoneRebalancing: ENABLED
+      EnableECSManagedTags: true
+      EnableExecuteCommand: false
+      PropagateTags: SERVICE
+      HealthCheckGracePeriodSeconds: 30
+      CapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Base: 0
+          Weight: 1
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - Fn::ImportValue: !Sub ${ProjectName}-GoTaskSecurityGroupId
+          Subnets: !Split
+            - ","
+            - Fn::ImportValue: !Sub ${ProjectName}-PrivateSubnetIds
+      LoadBalancers:
+        - ContainerName: go-api
+          ContainerPort: 8080
+          TargetGroupArn: !Ref PreviewTargetGroup
+      Tags: *PreviewTags
+
+Outputs:
+  PreviewKey:
+    Value: !Ref PreviewKey
+  ImageTag:
+    Value: !Ref ImageTag
+  DatabaseSchema:
+    Value: !Sub pr_${PRNumber}
+  RuntimeTaskDefinitionArn:
+    Value: !Ref PreviewTaskDefinition
+  DatabaseTaskDefinitionArn:
+    Value: !Ref PreviewDatabaseTaskDefinition
+  TargetGroupArn:
+    Value: !Ref PreviewTargetGroup
+  EcsServiceName:
+    Condition: CreateRouting
+    Value: !GetAtt PreviewService.Name
