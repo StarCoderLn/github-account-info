@@ -7,6 +7,7 @@ Cloudflare Pages and the isolated preview CodeBuild pipeline can be verified.
 - Retry gate: resolved CodeBuild source version
 - Retry gate: PR number prefix parsing
 - Retry gate: CloudFormation YAML without aliases
+- Retry gate: typed preview seed and route-safe retry
 - Expected data boundary: the schema derived from this pull request number
 - Production behavior: unchanged
 
