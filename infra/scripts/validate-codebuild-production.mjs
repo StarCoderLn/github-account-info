@@ -12,6 +12,10 @@ const deployScript = readFileSync(
 	new URL("./deploy-go-production.sh", import.meta.url),
 	"utf8",
 );
+const dockerfile = readFileSync(
+	new URL("../../apps/go-api/Dockerfile", import.meta.url),
+	"utf8",
+);
 
 assertIncludes(template, "Pattern: ^refs/heads/master$");
 assertIncludes(template, "Pattern: PUSH");
@@ -28,8 +32,14 @@ assertOrdered(buildspec, [
 ]);
 assertIncludes(buildspec, "go vet ./...");
 assertIncludes(buildspec, "go test ./...");
+assertIncludes(buildspec, '$1 == "ARG" && $2 ~ /^GO_IMAGE=/');
 assertIncludes(buildspec, 'docker push "$IMAGE_URI"');
 assertIncludes(buildspec, "aws ecr describe-images");
+
+const goBuilderImage = dockerfile.match(/^ARG GO_IMAGE=(\S+)$/m)?.[1];
+if (!goBuilderImage?.includes("@sha256:")) {
+	throw new Error("Dockerfile GO_IMAGE must be digest-pinned");
+}
 
 assertIncludes(deployScript, "aws ecs wait services-stable");
 assertIncludes(deployScript, "smoke_test /healthz");

@@ -72,6 +72,7 @@ assertIncludes(previewProject, "PULL_REQUEST_MERGED,PULL_REQUEST_CLOSED");
 assertIncludes(previewProject, "Pattern: ^refs/heads/master$");
 assertIncludes(previewProject, "CODEBUILD_BUILD_SUCCEEDING");
 assertIncludes(previewProject, ".codebuild-preview-image-ready");
+assertIncludes(previewProject, '$1 == "ARG" && $2 ~ /^GO_IMAGE=/');
 assertOrdered(previewProject, [
 	"deploy_stack false 0",
 	"run_database_task drop",
@@ -83,6 +84,10 @@ assertIncludes(previewDatabase, "ErrUnsafeConfirmation");
 assertIncludes(previewDatabase, "DROP SCHEMA IF EXISTS ");
 assertIncludes(dockerfile, "/out/preview-db");
 assertIncludes(dockerfile, "/preview-db");
+const goBuilderImage = dockerfile.match(/^ARG GO_IMAGE=(\S+)$/m)?.[1];
+if (!goBuilderImage?.includes("@sha256:")) {
+	throw new Error("Dockerfile GO_IMAGE must be digest-pinned");
+}
 
 console.log(
 	"Preview boundary valid: four isolated roles, approved PR webhook, pr-only stacks, separate secret, header routing, guarded schema cleanup",

@@ -36,7 +36,7 @@
 | F-021 | 已证明 | 部署后 `GET /` 与 `account.list` tRPC 均返回 200，API ID 未变化，Node/Lambda 原链路无回归。 |
 | F-022 | 已证明 | Lambda 已通过 Cloud Map private DNS 成功 generate/cache hit；force new deployment 后 Task IP 从 `10.0.2.84` 变为 `10.0.3.90`，再次调用仍为 200/cache hit。 |
 | F-023 | 已证明 | production Task 已从 Secret 启动并通过应用启动前 `pool.Ping`，Execution Role 的 production Secret 只读边界已云端核对。 |
-| F-024 | 待云端验收 | CodeBuild buildspec/静态顺序检查已证明设计；需真实 build log。 |
+| F-024 | 部分完成 | 首次真实 CodeBuild 在 PRE_BUILD 安全门失败，已证明失败不会写 ECR 或更新 ECS；仍需一次成功 build/deploy/smoke log。 |
 | F-025 | 已证明 | production `prod-<sha>`、preview `pr-<number>-<40sha>` 约束与共享 preview key 测试。 |
 | F-026 | 待云端验收 | 参数化 PR Task Definitions/Service/TG/Rule/schema 已存在；需两个 PR 实例证据。 |
 | F-027 | 已证明 | PR template 只 import 共享 VPC/cluster/ECR/ALB/API/RDS foundation outputs。 |

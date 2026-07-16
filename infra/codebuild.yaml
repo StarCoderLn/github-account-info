@@ -273,7 +273,7 @@ Resources:
                     IMAGE_TAG="pr-${PR_NUMBER}-${COMMIT_SHA}"
                     IMAGE_URI="${ECR_REPOSITORY_URI}:${IMAGE_TAG}"
                     EXPIRES_AT="$(date -u -d '+7 days' '+%Y-%m-%dT%H:%M:%SZ')"
-                    GO_BUILDER_IMAGE="$(awk '$1 == "FROM" && $2 ~ /^golang:/ { print $2; exit }' apps/go-api/Dockerfile)"
+                    GO_BUILDER_IMAGE="$(awk '$1 == "ARG" && $2 ~ /^GO_IMAGE=/ { sub(/^GO_IMAGE=/, "", $2); print $2; exit }' apps/go-api/Dockerfile)"
                     [[ "$GO_BUILDER_IMAGE" == *@sha256:* ]] || { echo "Go builder image must be digest-pinned" >&2; exit 1; }
                     aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.${AWS_URL_SUFFIX:-amazonaws.com}"
                     docker pull "$GO_BUILDER_IMAGE"
