@@ -5,6 +5,7 @@ Cloudflare Pages and the isolated preview CodeBuild pipeline can be verified.
 
 - Validation lane: B
 - Retry gate: resolved CodeBuild source version
+- Retry gate: PR number prefix parsing
 - Expected data boundary: the schema derived from this pull request number
 - Production behavior: unchanged
 
