@@ -36,7 +36,7 @@
 | F-021 | 已证明 | 部署后 `GET /` 与 `account.list` tRPC 均返回 200，API ID 未变化，Node/Lambda 原链路无回归。 |
 | F-022 | 已证明 | Lambda 已通过 Cloud Map private DNS 成功 generate/cache hit；force new deployment 后 Task IP 从 `10.0.2.84` 变为 `10.0.3.90`，再次调用仍为 200/cache hit。 |
 | F-023 | 已证明 | production Task 已从 Secret 启动并通过应用启动前 `pool.Ping`，Execution Role 的 production Secret 只读边界已云端核对。 |
-| F-024 | 部分完成 | 首次真实 CodeBuild 在 PRE_BUILD 安全门失败且未写 ECR；第二次已完成测试、Docker build 与 ECR push，但 POST_BUILD 因缺少 `GetTemplateSummary` 被拒绝。两次均未更新 ECS；仍需一次成功 deploy/smoke log。 |
+| F-024 | 已证明 | 首次真实 CodeBuild 在 PRE_BUILD 安全门失败且未写 ECR；第二次完成构建/ECR push 后在 POST_BUILD 权限门失败且未更新 ECS；修复 IAM 后第三次 build 全阶段成功，并完成 ECS stable wait 与 health/readiness smoke test。 |
 | F-025 | 已证明 | production `prod-<sha>`、preview `pr-<number>-<40sha>` 约束与共享 preview key 测试。 |
 | F-026 | 待云端验收 | 参数化 PR Task Definitions/Service/TG/Rule/schema 已存在；需两个 PR 实例证据。 |
 | F-027 | 已证明 | PR template 只 import 共享 VPC/cluster/ECR/ALB/API/RDS foundation outputs。 |
@@ -74,14 +74,14 @@
 | AC-005 | 已证明 | 部署 route 清单恰好 7 条；Node/tRPC 200、Go health/ready 200、公开缺失用户 404、OPTIONS 204、`/internal` 404 均已实测。 |
 | AC-006 | 已证明 | ALB `Scheme=internal`，Task 无 public IP，公网只暴露 API Gateway route；无 ALB 公网入口。 |
 | AC-007 | 已证明 | Lambda Cloud Map 首次 generate 200、第二次 cache hit、公开 GET 200；Task IP 替换后 Cloud Map/ALB 新实例 healthy，Lambda 再次 cache hit。 |
-| AC-008 | 待云端验收 | 一次成功 CodeBuild + 一次故意失败且 stable task revision 不变。 |
+| AC-008 | 已证明 | build #1/#2 失败时 stable task revision 保持 1；build #3 全阶段成功并将 ECS 切到 revision 2，rollout completed、failedTasks=0，health/readiness 200。 |
 | AC-009 | 待云端验收 | 两个并发 PR 的不同 preview key、Target Group、Service、schema 和不同 seed/update 结果。 |
 | AC-010 | 待云端验收 | close PR 后 stack/rule/service/schema 消失，production health 保持 200。 |
 | AC-011 | 已证明 | README/spec/infra 文档均以 Amazon RDS/标准 PostgreSQL 为当前 production；Neon 仅保留为历史迁移说明或脚手架元数据。 |
 
 ## 当前仍待完成的外部证据
 
-1. foundation、IAM、production ECS runtime、VPC Link/API Gateway 与 CodeBuild projects/webhooks 均已于 2026-07-16 完成真实云端部署；production CodeBuild 已执行两次，T-902 构建与 ECR 推送已证明。只读 IAM 修复 Change Set 已执行并从实际 role policy 复核，T-903 仍待新提交重试。
+1. foundation、IAM、production ECS runtime、VPC Link/API Gateway 与 CodeBuild projects/webhooks 均已完成真实云端部署；production CodeBuild 已取得失败守卫与全阶段成功证据，T-901～T-904、F-024 与 AC-008 全部完成。
 2. Lambda → Cloud Map → Go 已完成首次生成、缓存命中、不可用降级与 Task IP 替换后的重新发现验收。
 3. 两个真实 PR preview 与 close cleanup 尚未运行。
 4. 空 localStorage 浏览器验收尚未执行。
