@@ -2,6 +2,10 @@ import { readFileSync } from "node:fs";
 
 const templateUrl = new URL("../../apps/server/template.yaml", import.meta.url);
 const template = readFileSync(templateUrl, "utf8");
+const foundationTemplate = readFileSync(
+	new URL("../go-foundation.yaml", import.meta.url),
+	"utf8",
+);
 
 const expectedRouteKeys = [
 	"ANY /trpc/{proxy+}",
@@ -13,9 +17,8 @@ const expectedRouteKeys = [
 	"OPTIONS /trpc/{proxy+}",
 ].sort();
 
-const actualRouteKeys = [...template.matchAll(/^\s+RouteKey:\s+(.+?)\s*$/gm)]
-	.map((match) => match[1])
-	.sort();
+const api = resourceBlock("ServerlessHttpApi");
+const actualRouteKeys = openApiRouteKeys(api).sort();
 
 assertEqual(
 	actualRouteKeys,
@@ -23,18 +26,27 @@ assertEqual(
 	"HTTP API route keys changed; /internal and $default routes are forbidden",
 );
 
-const goIntegration = resourceBlock("GoAlbIntegration");
-assertIncludes(goIntegration, "IntegrationType: HTTP_PROXY");
-assertIncludes(goIntegration, "ConnectionType: VPC_LINK");
-assertIncludes(
-	goIntegration,
-	["$", "{ProjectName}-InternalHttpListenerArn"].join(""),
-);
-assertIncludes(goIntegration, '"overwrite:path": $request.path');
+assertIncludes(api, "type: http_proxy");
+assertIncludes(api, "connectionType: VPC_LINK");
+assertIncludes(api, ["$", "{ProjectName}-InternalHttpListenerArn"].join(""));
+assertIncludes(api, 'overwrite:path: "$request.path"');
+assertIncludes(api, "connectionId: !Ref GoApiVpcLink");
+assertIncludes(api, "httpMethod: GET");
+assertIncludes(api, "httpMethod: OPTIONS");
+assertExcludes(api, "httpMethod: ANY");
 
-const lambdaIntegration = resourceBlock("LambdaIntegration");
-assertIncludes(lambdaIntegration, "IntegrationType: AWS_PROXY");
-assertIncludes(lambdaIntegration, 'PayloadFormatVersion: "2.0"');
+assertIncludes(api, "type: aws_proxy");
+assertIncludes(api, 'payloadFormatVersion: "2.0"');
+assertExcludes(api, "ProtocolType:");
+assertExcludes(template, "Type: AWS::ApiGatewayV2::Route");
+assertMatches(
+	foundationTemplate,
+	/routing\.http\.desync_mitigation_mode[\s\S]*?Value: defensive/,
+);
+assertExcludes(
+	foundationTemplate,
+	"routing.http.desync_mitigation_mode\n          Value: strictest",
+);
 
 console.log(`HTTP API boundary valid: ${actualRouteKeys.join(", ")}`);
 
@@ -49,11 +61,49 @@ function resourceBlock(logicalId) {
 	return match[0];
 }
 
+function openApiRouteKeys(apiBlock) {
+	const routes = [];
+	let currentPath;
+
+	for (const line of apiBlock.split("\n")) {
+		const pathMatch = line.match(/^ {10}"([^"]+)":\s*$/);
+		if (pathMatch) {
+			currentPath = pathMatch[1];
+			continue;
+		}
+
+		const methodMatch = line.match(
+			/^ {12}(get|options|x-amazon-apigateway-any-method):\s*$/,
+		);
+		if (!currentPath || !methodMatch) continue;
+
+		const method =
+			methodMatch[1] === "x-amazon-apigateway-any-method"
+				? "ANY"
+				: methodMatch[1].toUpperCase();
+		routes.push(`${method} ${currentPath}`);
+	}
+
+	return routes;
+}
+
 function assertIncludes(value, expected) {
 	if (!value.includes(expected)) {
 		throw new Error(
 			`expected resource block to contain ${JSON.stringify(expected)}`,
 		);
+	}
+}
+
+function assertExcludes(value, forbidden) {
+	if (value.includes(forbidden)) {
+		throw new Error(`expected value to exclude ${JSON.stringify(forbidden)}`);
+	}
+}
+
+function assertMatches(value, expected) {
+	if (!expected.test(value)) {
+		throw new Error(`expected value to match ${expected}`);
 	}
 }
 

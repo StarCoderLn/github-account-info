@@ -76,7 +76,7 @@
 
 33. [F-033] 公开访客不需要应用登录即可读取 `/u/$username` 和 introduction GET API。
 34. [F-034] 内部生成是写操作，只允许由处于 VPC 内的 Lambda 经 Cloud Map 调用，不得通过 API Gateway 创建公开 `/internal/*` route。
-35. [F-035] 现有 Node 管理写接口和 introduction generate mutation 在生产公开前必须置于 Cloudflare Access 等管理边界后；若不部署管理认证，则生产关闭在线生成与写入，只允许本地管理。
+35. [F-035] 为保持现有无登录产品行为，production 显式开启 Node 管理型 tRPC；`managementProcedure` 与默认关闭配置保留为部署开关，同时文档必须明确 CORS 不是认证、该公开写入口只适用于当前个人学习项目风险模型。
 36. [F-036] GitHub PAT 不进入 Go 服务、不进入 URL、不写日志、不写数据库。
 37. [F-037] Go Task Security Group 只允许 Internal ALB Security Group 与 Lambda Security Group 访问容器端口。
 38. [F-038] PR preview 数据不得包含生产敏感数据；默认使用空 schema 或显式非敏感 seed。
@@ -110,11 +110,11 @@
 - 公开主页读取无需登录。
 - Node 保留 GitHub PAT 与账号写入；Go 负责根据已有账号资料生成并保存独立的 introduction，同时提供公开读取。
 - 第一版生成器使用 Go 规则模板，不调用 AI；保留可插拔 interface 仅用于将来扩展。
-- production Lambda 默认设置 `MANAGEMENT_API_ENABLED=false`，所有管理型 tRPC procedure fail closed；本地开发可显式开启。未来即使加入 Cloudflare Access，也必须先在后端验证 Access identity/JWT，不能只保护前端页面后就开放写入。
+- production Lambda 为兼容现有功能显式设置 `MANAGEMENT_API_ENABLED=true`；代码级默认仍为 `false`，所有管理型接口仍统一经过 `managementProcedure`。当前没有应用登录或后端身份校验，CORS 不是认证，因此任何知道 API 地址的调用者理论上都能尝试调用写接口；若未来面向多用户，必须先在后端验证 Access identity/JWT 或等价凭证。
 - production 与 PR 使用同一 RDS 实例但不同 database/credential；preview database 内按 `pr_<number>` schema 隔离。
 - 使用 CloudFormation/SAM 延续现有 IaC，不引入 Terraform/CDK。
 
 ## 开放问题
 
-- [O-001 已解决] 当前采用 production 在线管理关闭、本地管理；后续若实现后端可验证的 Cloudflare Access/JWT 再单独开放。
+- [O-001 已解决] 当前按用户决策保留无登录的 production 在线管理，以兼容原有功能并接受个人学习项目的公开写入风险；未来面向多用户时再引入后端可验证的身份边界。
 - [O-002] 是否为公开主页增加结构化内容字段（headline、skills、featured projects、theme）；第一版至少包含一段 introduction content。

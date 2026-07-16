@@ -287,6 +287,7 @@ Go Task SG 不接受 VPC CIDR 全放行；RDS SG 使用 security-group reference
 - namespace：`github-account-info.local`，private DNS。
 - service：`go-api`。
 - Lambda 内部 URL：`http://go-api.github-account-info.local:8080/internal/v1/introductions`。
+- 复用 VPC 必须同时设置 `enableDnsSupport=true` 与 `enableDnsHostnames=true`；Cloud Map private DNS 背后是 Route 53 Private Hosted Zone，缺少任一属性都会使 Lambda DNS 解析失败。
 - ECS 控制面负责注册/注销 production task 私网 IP；preview 不注册到该 service，避免 Lambda 随机发现 PR Task。
 - Node Go client 使用连接与总请求超时；不会无限重试非幂等操作。
 
@@ -399,7 +400,7 @@ CloudFormation 是基础设施事实来源；Console 用于学习、观察和故
 - Go 的公开 `/api/v1` 无写 endpoint；内部 `POST /internal/v1/introductions` 是受 VPC 网络与管理入口边界保护的写操作。
 - 第一版只使用 Go 规则模板生成，不调用 AI 或外部生成 API。
 - email 默认不是 public profile 字段。
-- production 当前采用只读策略：Lambda 固定 `MANAGEMENT_API_ENABLED=false`，管理型 tRPC procedure 在业务逻辑和数据库访问前返回 `FORBIDDEN`；本地开发显式开启。仅保护 Cloudflare 页面不足以防止直连 API Gateway，未来必须完成后端 Access JWT/identity 验证后才能开放 production 管理操作。
+- production 按兼容性决策显式设置 `MANAGEMENT_API_ENABLED=true`，继续提供原有 Node 账号管理与 PAT 拉取；Lambda 仍直连 RDS 管理 `github_account`，并通过 Cloud Map 调 Go 完成 introduction generate。代码默认保持关闭且所有管理型接口统一经过 `managementProcedure`，便于未来切换安全策略。当前无登录写入口不是认证安全方案；仅保护 Cloudflare 页面也不能防止直连 API Gateway，若面向多用户必须增加后端可验证的 identity/JWT 或等价凭证。
 - preview header 只用于路由，不视为认证；PR schema 不含生产秘密数据。
 - PR schema 隔离只服务于可信协作者并行验证，不把共享 preview credential 当成多租户安全边界。
 - PAT 继续遵循现有请求头传输、不记录、不响应的约束，且永不进入 Go。

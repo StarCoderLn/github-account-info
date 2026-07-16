@@ -32,7 +32,7 @@
 - [x] T-003：确认 Go 的核心是复用现有 GitHub username/账号资料生成新的 introduction，而非简单展示 profile。
 - [x] T-004：冻结 Node/Go 边界：Node 保留 PAT/账号写入，Go 生成并保存 introduction；Drizzle 保持 migration 单一所有权。
 - [x] T-005：定义 production/PR 资源模型、四个隔离 IAM Role 与验收门槛。
-- [x] T-006：部署前确认管理端使用 Cloudflare Access，或改为 production 只读。
+- [x] T-006：明确 production 管理边界：保留现有无登录 Node 管理链路，并记录公开写入口仅适用于个人学习项目的风险。
 - [x] T-007：确认第一版使用 Go 规则模板生成，不调用 AI；保留 generator interface。
 
 ## 阶段 1：Go 工具链与 monorepo
@@ -94,31 +94,31 @@ T-307 当前状态：类型检查及 `server`、`web`、`go-api` production buil
 
 ## 阶段 6：生产 ECS/Fargate
 
-- [ ] T-601：构建并推送首个 SHA-tagged ECR image。
-- [ ] T-602：创建 production Task Definition、Target Group 与 ECS Service。
-- [ ] T-603：配置 private subnets、security groups、secret injection 与 Cloud Map registration。
-- [ ] T-604：验证 task healthy、ALB VPC 内访问、RDS 查询与 CloudWatch logs。
-- [ ] T-605：验证 Internal ALB 无公网可达路径。
+- [x] T-601：构建并推送首个 SHA-tagged ECR image。
+- [x] T-602：创建 production Task Definition、Target Group 与 ECS Service。
+- [x] T-603：配置 private subnets、security groups、secret injection 与 Cloud Map registration。
+- [x] T-604：验证 task healthy、ALB VPC 内访问、RDS 查询与 CloudWatch logs。
+- [x] T-605：验证 Internal ALB 无公网可达路径。
 
-阶段 6 准备状态（2026-07-16）：`infra/go-production.yaml` 已编写并通过 `sam validate --lint`，包含不可变 `prod-<sha>` image、非 root/只读 rootfs Task Definition、production Target Group/path rule、Fargate Service、私有子网、Secret 注入和 Cloud Map registration。Go 的 gofmt、module verify、vet、test 均通过，production Dockerfile 已成功构建 `linux/amd64` 本地镜像并确认 runtime 为 `65532:65532`、入口为 `/go-api`。production Drizzle migration 已通过 SSM 隧道成功应用；只读验收确认 `profile_introduction`、lower(login) 索引、主键/唯一键/外键和 4 条 migration journal 均存在，原有 `github_account` 仍为 1 行且新表为 0 行。monorepo `pnpm test`、`pnpm check-types` 以及 Go/Server/Web/Fumadocs production build 均通过（Fumadocs 因沙箱 IPC 限制在正常本机权限下单独验证）。`infra/scripts/push-go-production-image.sh` 会拒绝 dirty worktree，ECR push 与 runtime stack 尚未执行，因此 T-601～T-605 仍保持未完成。
+阶段 6 云端验收（2026-07-16）：`github-account-info-go-production` 已为 `CREATE_COMPLETE`，使用不可变镜像 `prod-e75ba48214bc01ce27ac9a8f6aec8d28c816b9ea`（digest `sha256:445817570ded060f84db96826257c0c6f225d50deb496dbc47c1e7dda168b45d`）。ECS Service 为 `ACTIVE`，desired/running/pending=`1/1/0`、rollout=`COMPLETED`、failedTasks=`0`；ALB Target `10.0.2.84:8080` 为 healthy，Cloud Map 同一实例为 `HEALTHY`。Task 使用两座 private subnet、`AssignPublicIp=DISABLED`，实际 ENI 仅有 private IP 并绑定 Go Task SG；ALB `Scheme=internal` 且位于同一 VPC 的两座 private subnet。CloudWatch Logs 已记录 Go API 监听 8080 以及持续 `/healthz` 200，应用启动前的 `pool.Ping` 成功也证明 production Secret、RDS 网络与 verify-full TLS 链路可用；4 个 production alarms 均为 `OK`。因此阶段 6 已完成，公网 `/readyz` 将在阶段 7 通过 VPC Link 再做端到端验收。
 
 ## 阶段 7：API Gateway VPC Link
 
 - [x] T-701：将 SAM 隐式 HttpApi 重构为显式资源，保留 Lambda 路由。
-- [ ] T-702：创建 VPC Link 与 ALB private HTTP integration。
-- [ ] T-703：配置公开 `/api/v1/*`、health、ready 路由和 path mapping，确认没有公网 `/internal/*` route。
+- [x] T-702：创建 VPC Link 与 ALB private HTTP integration。
+- [x] T-703：配置公开 `/api/v1/*`、health、ready 路由和 path mapping，确认没有公网 `/internal/*` route。
 - [x] T-704：更新 CORS，覆盖 production 与受控 Cloudflare preview origins。
-- [ ] T-705：验证 tRPC 与 Go route 共存、OPTIONS 与错误路径。
+- [x] T-705：验证 tRPC 与 Go route 共存、OPTIONS 与错误路径。
 
-阶段 7 本地实现状态（2026-07-16）：现有隐式 `ServerlessHttpApi` 已按同一 logical ID 显式化，Node 保留 `GET /`、`ANY /trpc/{proxy+}` 及其 OPTIONS；Go private integration、VPC Link、GET/OPTIONS route 和 `overwrite:path=$request.path` 已写入模板。`pnpm check:infra` 固定允许的 7 个 RouteKey，并禁止 `$default`/`/internal` route；Go CORS 只接受 production 精确 origin 或指定 Cloudflare Pages HTTPS 子域后缀。SAM lint、server typecheck 与 Lambda bundle 均通过。T-702～T-705 仍需 foundation/production healthy 后由用户创建 change set并完成真实路由、CORS 与共存验收。
+阶段 7 云端验收（2026-07-16）：`stage7-vpc-link-review-v3` 与两次无替换修复均已执行，API stack 和 Foundation stack 为 `UPDATE_COMPLETE`，API ID 仍为 `mdgq1tigyl`，VPC Link `5fkxcv` 为 `AVAILABLE`。首次 Go GET 被 ALB 以 400 拒绝；指标显示 `HTTPCode_ELB_4XX_Count=3` 而 target 4XX 无数据，最终定位到 Internal ALB `routing.http.desync_mitigation_mode=strictest`。按 AWS 官方排障建议改为 `defensive` 后，`/healthz`、`/readyz` 均返回 JSON 200，公开缺失用户返回 JSON 404，Go ECS 日志记录了对应 GET；受控 Cloudflare Origin 的 Go 与 tRPC OPTIONS 均返回 204 和正确 CORS，公网 `/internal/*` 返回 404。Node 根路径和 `account.list` tRPC 继续返回 200，部署 route 清单恰好只有约定的 7 条且没有 `$default`/`/internal`。因此 T-702、T-703、T-705 与 Stage 7 全部完成，并用静态检查固定 ALB defensive 回归边界。
 
 ## 阶段 8：Cloud Map 内部调用
 
 - [x] T-801：在 Node 中实现带超时和语义化错误的 Go introduction generate client。
 - [x] T-802：实现 `introduction.generate` tRPC mutation，经 Cloud Map 调 Go internal endpoint。
-- [ ] T-803：验证 Lambda DNS resolution、task IP 替换、生成超时和 Go 不可用降级。
+- [x] T-803：验证 Lambda DNS resolution、task IP 替换、生成超时和 Go 不可用降级。
 
-阶段 8 本地实现状态（2026-07-16）：Node client 固定调用 `/internal/v1/introductions`，默认 base URL 为 Cloud Map 私有 DNS，不携带 Authorization/PAT，并使用 8 秒请求超时；tRPC mutation 对 400/404/503、异常响应和未知内部错误做语义化且不泄密的映射。client 与可注入 router 共 10 项测试全部通过。T-803 仍必须在 ECS/Cloud Map 部署后由用户完成真实 DNS、Task replacement 和故障降级验收。
+阶段 8 云端验收（2026-07-16）：Node client 固定调用 `/internal/v1/introductions`，默认 base URL 为 Cloud Map 私有 DNS，不携带 Authorization/PAT，并使用 8 秒请求超时；tRPC mutation 对 400/404/503、异常响应和未知内部错误做语义化且不泄密的映射，相关 contract/边界测试全部通过。首次真实调用因复用 VPC `enableDnsHostnames=false` 返回语义化 503，提供了 Go 不可用降级证据；用户确认启用后，VPC 两项 DNS 属性均为 true，同 VPC bastion 可解析 Cloud Map。不存在用户调用恢复为契约化 tRPC 404；用户确认的首次 production 生成返回 200、`generated=true`、非空介绍与 generatorVersion，第二次返回 `generated=false`，公开 Go GET 返回 200。随后执行 ECS force new deployment：旧 Task `d0af...` / `10.0.2.84` 被新 Task `51aa...` / `10.0.3.90` 替换，rollout completed、failedTasks=0，Cloud Map 与 ALB 均只保留新 IP 且 healthy；Lambda 经稳定 DNS 再次调用返回 200/cache hit，health/ready 仍为 200。用户名、个人资料和介绍内容均未输出。结合自动化 timeout contract test，T-803 与 Stage 8 全部完成。
 
 ## 阶段 9：CodeBuild production pipeline
 
@@ -127,7 +127,7 @@ T-307 当前状态：类型检查及 `server`、`web`、`go-api` production buil
 - [ ] T-903：注册 task revision、更新 ECS service、等待稳定并 smoke test。
 - [ ] T-904：验证失败构建不会替换 production stable revision。
 
-阶段 9 本地实现状态（2026-07-16）：`infra/codebuild.yaml`、`infra/buildspec/go-production.yml` 与部署/回滚脚本已完成。production webhook 只接受可信 `master` push 与指定路径；构建成功门、ECR image marker、ECS stable wait、health/readiness smoke test 及上一 image tag 恢复逻辑已加入静态校验。T-902～T-904 仍需阶段 5～8 的真实 AWS 资源就绪后，由用户执行 CodeBuild 并依据真实日志、ECR digest、ECS deployment 与 API 响应验收。
+阶段 9 云端状态（2026-07-16）：`infra/codebuild.yaml`、`infra/buildspec/go-production.yml` 与部署/回滚脚本已完成，并已通过 AWS `validate-template`（要求 `CAPABILITY_IAM`）。production webhook 只接受可信 `master` push 与指定路径；构建成功门、ECR image marker、ECS stable wait、health/readiness smoke test 及上一 image tag 恢复逻辑已加入静态校验。GitHub CodeConnection `github-account-info-go` 已由用户在 AWS Console 完成授权，并由 CLI 复核为 `AVAILABLE`。首次 CREATE Change Set `stage9-codebuild-review` 在 `ProductionBuildProject` 的 `CreateWebhook` 阶段因 GitHub App 尚未安装而回滚；没有 CodeBuild project 或 IAM policy 残留。用户随后已安装 AWS Connector for GitHub，并只授权 `github-account-info` repository；失败空 stack 与两个 0-byte retained log group 已清理。修复 Change Set `stage9-codebuild-review-v2` 已执行，`github-account-info-go-codebuild` 为 `CREATE_COMPLETE`。production/preview 两个 project 与 webhook 均为 `ACTIVE`；production 实际 filter 只有 `PUSH + master + FILE_PATH`，preview 只有目标 master 的 PR create/update/reopen/merge/close 且要求 `ALL_PULL_REQUESTS` 评论审批。两个 project 的 build list 均为空，证明资源创建没有自动触发构建。T-902～T-904 仍需真实 build log、ECR digest、ECS deployment、smoke response 与故意失败构建证据。
 
 ## 阶段 10：PR 独立环境
 
@@ -150,7 +150,7 @@ T-307 当前状态：类型检查及 `server`、`web`、`go-api` production buil
 
 阶段 11 本地实现状态（2026-07-16）：PR close/merge buildspec 已按 rule/service → schema → stack 的顺序实现清理；ECR 14 天 lifecycle 与 `ExpiresAt` tag 已存在。production stack 新增 ALB unhealthy/target 5xx、ECS running-task/high-CPU 告警，server stack 新增 HTTP API 5xx 告警，均可选接入现有 SNS Topic 且不新增 IAM Role。`infra/RUNBOOK.md` 与 `docs/go-profile-platform.svg` 已加入。T-1102 只剩定时兜底触发器；EventBridge 启动 CodeBuild 需要额外 invocation role，需由用户先决定是否接受第五个窄权限角色。T-1105 必须结合真实 AWS 部署验收，因此保持未完成。
 
-安全审计补充（2026-07-16）：仅给 Cloudflare 页面配置 Access 无法阻止调用者绕过 Cloudflare 直连 API Gateway。现已新增 `managementProcedure`，覆盖 account list/CRUD、GitHub PAT 拉取与 introduction generate；production Lambda 固定 `MANAGEMENT_API_ENABLED=false`，本地 `.env` 才显式开启。静态边界检查和关闭状态测试已接入，满足 T-006 的 production 只读分支。
+安全审计补充（2026-07-16）：仅给 Cloudflare 页面配置 Access 无法阻止调用者绕过 Cloudflare 直连 API Gateway。`managementProcedure` 覆盖 account list/CRUD、GitHub PAT 拉取与 introduction generate，代码默认仍为关闭；根据用户确认的渐进迁移方案，production 模板显式设置 `MANAGEMENT_API_ENABLED=true`，保留原 Node → RDS 账号链路，仅新增 Lambda → Cloud Map → Go 的介绍生成链路。这一兼容性选择不等于认证，公开写入口只适用于当前个人学习项目风险模型。
 
 ## 依赖关系
 

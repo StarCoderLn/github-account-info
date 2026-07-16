@@ -161,6 +161,22 @@ aws cloudformation describe-change-set \
 
 把资源变化列表和脱敏后的失败事件返回给 Codex共同审查。不要执行 change set，直到逐项确认成本、安全组方向和回滚方案。foundation change set 不应出现 `AWS::IAM::Role`。
 
+Cloud Map private DNS 会创建 Route 53 Private Hosted Zone，因此复用的 VPC 必须同时启用 DNS support 与 DNS hostnames。foundation 执行前检查：
+
+```bash
+aws ec2 describe-vpc-attribute \
+  --region us-east-2 \
+  --vpc-id <vpc-id> \
+  --attribute enableDnsSupport
+
+aws ec2 describe-vpc-attribute \
+  --region us-east-2 \
+  --vpc-id <vpc-id> \
+  --attribute enableDnsHostnames
+```
+
+两项都必须返回 `Value: true`。如果该 VPC 不由本仓库 CloudFormation 管理，需要把属性变更作为一次显式、人工审计的 VPC 前置操作；否则 Lambda 即使与 Task 位于同一 VPC且安全组正确，也无法通过 Cloud Map private DNS 解析 Go Task。
+
 ### 6. foundation 完成后创建 IAM 待审 change set
 
 IAM stack 通过 `Fn::ImportValue` 引用 foundation 的 ECR、Cluster、Listener 和 Log Group，因此必须在 foundation stack 执行成功后创建。先填写被 Git 忽略的 `infra/parameters/go-iam.local.json`，其中只写 Secret ARN，绝不写 Secret value：
@@ -244,6 +260,8 @@ production pipeline 只信任 `master` 分支的 `PUSH` 事件，并额外使用
 
 在 AWS Console 进入 **Developer Tools → Settings → Connections**，创建 GitHub connection，并只授权目标 repository。连接状态必须为 `AVAILABLE`。该步骤涉及 GitHub 授权，必须由用户在浏览器亲自完成；不要把 OAuth 凭证或 token 发给 Codex。
 
+只完成用户授权而不选择 GitHub App installation 时，connection 仍可能显示 `AVAILABLE`，但 CodeBuild 在创建 webhook 时被 GitHub 拒绝。必须确认 **AWS Connector for GitHub** 已安装到拥有目标 repository 的 GitHub account，并向目标 repository 授予访问及 webhook 权限；否则 CloudFormation 会在 `AWS::CodeBuild::Project` 的 `CreateWebhook` 阶段回滚。
+
 记录 connection ARN，然后确认 production API 已经部署并得到不带尾斜线的 base URL，例如：
 
 ```text
@@ -268,14 +286,14 @@ foundation/IAM stack、ECR、首个 production runtime 与 API Gateway 均验收
 aws cloudformation create-change-set \
   --region us-east-2 \
   --stack-name github-account-info-go-codebuild \
-  --change-set-name stage9-production-codebuild-review \
+  --change-set-name stage9-codebuild-review \
   --change-set-type CREATE \
   --template-body file://infra/codebuild.yaml \
   --parameters \
     ParameterKey=GitHubConnectionArn,ParameterValue=<CONNECTION_ARN> \
     ParameterKey=PublicApiBaseUrl,ParameterValue=<API_GATEWAY_BASE_URL> \
     ParameterKey=CorsOrigins,ParameterValue=<PRODUCTION_CLOUDFLARE_ORIGIN> \
-  --capabilities CAPABILITY_NAMED_IAM \
+  --capabilities CAPABILITY_IAM \
   --description 'Stage 9 trusted master production CodeBuild; review before execution'
 ```
 
@@ -330,7 +348,7 @@ Build output directory: apps/web/dist
 
 如果 production branch 不是 `master`，额外设置 `CF_PAGES_PRODUCTION_BRANCH`。不要手工设置 `VITE_PREVIEW_KEY`，除非是在本地做明确的路由测试。
 
-Preview 打开根路径会自动跳到 `/u/preview-user`。浏览器只在 Go public GET 中发送 `X-Preview-Environment`；preview 前端不会获得 production 数据库凭证。production Lambda 固定 `MANAGEMENT_API_ENABLED=false`，因此 account 管理、GitHub PAT 拉取与 introduction generate 均在 procedure 层 fail closed；CORS 不是认证，未来不能只靠 Cloudflare 页面 Access 就开放该开关。
+Preview 打开根路径会自动跳到 `/u/preview-user`。浏览器只在 Go public GET 中发送 `X-Preview-Environment`；preview 前端不会获得 production 数据库凭证。production Lambda 显式设置 `MANAGEMENT_API_ENABLED=true`，用于保持当前 account 管理、GitHub PAT 拉取和 introduction generate 行为不变；这是本项目“不新增登录”的兼容性选择，不构成认证。CORS 不能阻止调用者绕过 Cloudflare 直连 API Gateway，因此该生产写入口只适用于当前个人学习项目风险模型，不能作为多用户生产安全边界。
 
 `pr_<number>` schema 用于已审批协作者之间的功能和数据命名隔离，不是恶意多租户隔离。所有 preview task 共用 preview database credential，因此不应批准不可信代码执行；CodeBuild 的 `ALL_PULL_REQUESTS` 审批是执行 PR 代码前的信任门。即使误批，Preview Role/Task 也拿不到独立的 production database Secret。
 

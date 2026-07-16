@@ -12,7 +12,7 @@
 - **手动刷新**：支持一键从 GitHub 拉取最新数据覆盖本地，再手动保存入库
 - **个人介绍生成**：Go 根据已经保存的 GitHub username 与账号资料生成稳定的中文介绍，第一版不调用 AI
 - **公开个人主页**：通过 `/u/$username` 无登录读取已发布的个人介绍，不需要 GitHub PAT
-- **生产默认只读**：production Lambda 关闭管理型 tRPC；账号维护、PAT 拉取和介绍生成默认只在本地显式开启
+- **渐进式 Go 迁移**：production 保留现有 Node Lambda/tRPC 账号管理链路；个人介绍生成经 Cloud Map 调用 Go，公开读取经 VPC Link 进入 Go
 - **端到端类型安全**：tRPC + Drizzle + zod 全链路类型推导，无需手写接口类型
 
 ## 技术栈

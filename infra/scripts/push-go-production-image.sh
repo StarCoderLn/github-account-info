@@ -5,6 +5,8 @@ set -euo pipefail
 readonly AWS_REGION="${AWS_DEFAULT_REGION:-us-east-2}"
 readonly FOUNDATION_STACK_NAME="${FOUNDATION_STACK_NAME:-github-account-info-go-foundation}"
 readonly LOCAL_IMAGE="github-account-info-go:production-bootstrap"
+readonly GO_MOD_CACHE_VOLUME="github-account-info-go-mod-cache"
+readonly GO_BUILD_CACHE_VOLUME="github-account-info-go-build-cache"
 
 for command_name in aws docker git; do
   if ! command -v "${command_name}" >/dev/null 2>&1; then
@@ -63,18 +65,23 @@ fi
 
 docker run --rm \
   --volume "${PWD}/apps/go-api:/src:ro" \
+  --volume "${GO_MOD_CACHE_VOLUME}:/go/pkg/mod" \
   --workdir /src \
   "${builder_image}" \
   go mod verify
 
 docker run --rm \
   --volume "${PWD}/apps/go-api:/src:ro" \
+  --volume "${GO_MOD_CACHE_VOLUME}:/go/pkg/mod" \
+  --volume "${GO_BUILD_CACHE_VOLUME}:/root/.cache/go-build" \
   --workdir /src \
   "${builder_image}" \
   go vet ./...
 
 docker run --rm \
   --volume "${PWD}/apps/go-api:/src:ro" \
+  --volume "${GO_MOD_CACHE_VOLUME}:/go/pkg/mod" \
+  --volume "${GO_BUILD_CACHE_VOLUME}:/root/.cache/go-build" \
   --workdir /src \
   "${builder_image}" \
   go test ./...

@@ -9,7 +9,7 @@ const introductionRouter = read(
 	"../../packages/api/src/routers/introduction-router.ts",
 );
 
-assertIncludes(serverTemplate, 'MANAGEMENT_API_ENABLED: "false"');
+assertIncludes(serverTemplate, 'MANAGEMENT_API_ENABLED: "true"');
 assertIncludes(serverTemplate, "NODE_ENV: production");
 assertIncludes(serverEnv, "MANAGEMENT_API_ENABLED:");
 assertIncludes(serverEnv, ".default(false)");
@@ -25,7 +25,7 @@ assertOccurrenceCount(githubRouter, "managementProcedure", 2);
 assertOccurrenceCount(introductionRouter, "managementProcedure", 2);
 
 console.log(
-	"Management boundary valid: production tRPC management procedures fail closed",
+	"Management compatibility valid: production explicitly opts in while the code default remains closed",
 );
 
 function read(relativePath) {
