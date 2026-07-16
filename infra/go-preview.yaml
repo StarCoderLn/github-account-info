@@ -137,7 +137,7 @@ Resources:
             com.github-account-info.project: !Ref ProjectName
             com.github-account-info.environment: preview
             com.github-account-info.pr-number: !Ref PRNumber
-      Tags: &PreviewTags
+      Tags:
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
@@ -200,7 +200,21 @@ Resources:
               awslogs-stream-prefix: !Sub pr-${PRNumber}-db
               mode: non-blocking
               max-buffer-size: 4m
-      Tags: *PreviewTags
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: preview
+        - Key: PRNumber
+          Value: !Ref PRNumber
+        - Key: PreviewKey
+          Value: !Ref PreviewKey
+        - Key: ImageTag
+          Value: !Ref ImageTag
+        - Key: ExpiresAt
+          Value: !Ref ExpiresAt
+        - Key: ManagedBy
+          Value: cloudformation
 
   PreviewTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -228,7 +242,21 @@ Resources:
           Value: "15"
         - Key: stickiness.enabled
           Value: "false"
-      Tags: *PreviewTags
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: preview
+        - Key: PRNumber
+          Value: !Ref PRNumber
+        - Key: PreviewKey
+          Value: !Ref PreviewKey
+        - Key: ImageTag
+          Value: !Ref ImageTag
+        - Key: ExpiresAt
+          Value: !Ref ExpiresAt
+        - Key: ManagedBy
+          Value: cloudformation
 
   PreviewListenerRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
@@ -293,7 +321,21 @@ Resources:
         - ContainerName: go-api
           ContainerPort: 8080
           TargetGroupArn: !Ref PreviewTargetGroup
-      Tags: *PreviewTags
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: preview
+        - Key: PRNumber
+          Value: !Ref PRNumber
+        - Key: PreviewKey
+          Value: !Ref PreviewKey
+        - Key: ImageTag
+          Value: !Ref ImageTag
+        - Key: ExpiresAt
+          Value: !Ref ExpiresAt
+        - Key: ManagedBy
+          Value: cloudformation
 
 Outputs:
   PreviewKey:
