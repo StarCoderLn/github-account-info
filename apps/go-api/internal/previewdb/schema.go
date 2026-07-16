@@ -43,10 +43,10 @@ func Create(ctx context.Context, db Beginner, prNumber int) error {
 			return fmt.Errorf("create preview schema objects: %w", err)
 		}
 	}
-	if _, err := tx.Exec(ctx, seedAccountStatement(schema), prNumber); err != nil {
+	if _, err := tx.Exec(ctx, seedAccountStatement(schema), int64(prNumber)); err != nil {
 		return fmt.Errorf("seed preview account: %w", err)
 	}
-	if _, err := tx.Exec(ctx, seedIntroductionStatement(schema), prNumber); err != nil {
+	if _, err := tx.Exec(ctx, seedIntroductionStatement(schema), previewIntroductionArgs(prNumber)...); err != nil {
 		return fmt.Errorf("seed preview introduction: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -157,7 +157,7 @@ func seedIntroductionStatement(schema string) string {
 )
 SELECT
   id,
-  'Preview Developer（@preview-user）正在 PR #' || $1::text || ' 的隔离环境中验证个人介绍页面。这里的数据完全由 preview seed 生成，不会读取 production 账号。',
+  $2::text,
   'preview-seed-v1',
   repeat('0', 64)
 FROM ` + account + `
@@ -168,4 +168,12 @@ ON CONFLICT (github_account_id) DO UPDATE SET
   source_hash = EXCLUDED.source_hash,
   generated_at = now(),
   updated_at = now()`
+}
+
+func previewIntroductionContent(prNumber int) string {
+	return fmt.Sprintf("Preview Developer（@preview-user）正在 PR #%d 的隔离环境中验证个人介绍页面。这里的数据完全由 preview seed 生成，不会读取 production 账号。", prNumber)
+}
+
+func previewIntroductionArgs(prNumber int) []any {
+	return []any{int64(prNumber), previewIntroductionContent(prNumber)}
 }
