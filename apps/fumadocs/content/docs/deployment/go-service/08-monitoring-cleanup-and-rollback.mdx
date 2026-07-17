@@ -1,0 +1,178 @@
+---
+title: 8. 监控、清理与回滚
+description: CloudWatch 告警、分层诊断、TTL 兜底清理、镜像生命周期与生产恢复
+icon: HeartPulse
+---
+
+## 1. Production 告警
+
+| 告警 | 代表什么 | 第一检查点 |
+| --- | --- | --- |
+| `*-production-unhealthy-targets` | ALB 连续发现不健康 target | ECS deployment、stopped reason、health 日志 |
+| `*-production-target-5xx` | Go target 连续返回 5xx | Go 日志、RDS、最近 image tag |
+| `*-production-no-running-task` | running task 少于 1 | ECS events、ECR、Secret、子网出站 |
+| `*-production-high-cpu` | CPU 持续 ≥85% | 请求量、慢查询、Task CPU规格 |
+| `*-http-api-5xx` | API Gateway 连续 5xx | access log routeKey/integrationError |
+
+`AlarmTopicArn` 留空时告警仍会创建，只是不发送通知。要接收邮件或聊天通知，先创建并确认 SNS subscription，再把同一 ARN传入 production 和 server stack。
+
+## 2. 每日只读总览
+
+```bash
+aws cloudwatch describe-alarms \
+  --region us-east-2 \
+  --alarm-name-prefix github-account-info-go \
+  --query 'MetricAlarms[].{Name:AlarmName,State:StateValue,Reason:StateReason}' \
+  --output table
+
+aws ecs describe-services \
+  --region us-east-2 \
+  --cluster github-account-info-go \
+  --services github-account-info-go-production \
+  --query 'services[0].{Running:runningCount,Pending:pendingCount,Desired:desiredCount,Deployments:deployments[*].{Status:status,Running:runningCount,Desired:desiredCount,TaskDefinition:taskDefinition},Events:events[0:5]}' \
+  --output json
+```
+
+稳定 production 应为 desired/running/pending `1/1/0`、一个 primary deployment、target healthy、告警 OK。
+
+## 3. Running 为 0 时
+
+先找 stopped Task，不要立即重复部署：
+
+```bash
+aws ecs list-tasks \
+  --region us-east-2 \
+  --cluster github-account-info-go \
+  --service-name github-account-info-go-production \
+  --desired-status STOPPED \
+  --max-items 10
+
+aws ecs describe-tasks \
+  --region us-east-2 \
+  --cluster github-account-info-go \
+  --tasks <STOPPED_TASK_ARN> \
+  --query 'tasks[0].{StopCode:stopCode,StoppedReason:stoppedReason,Containers:containers[].{Name:name,ExitCode:exitCode,Reason:reason}}' \
+  --output json
+```
+
+常见分类：
+
+- `CannotPullContainerError`：ECR URI/tag、NAT/VPC endpoint、Execution Role。
+- `ResourceInitializationError`：Secrets Manager、KMS、CloudWatch Logs 或子网出站。
+- health check failed：8080、Task SG、`/healthz`、监听地址。
+- application exit：配置校验、RDS DNS/TLS、业务启动错误。
+
+## 4. API Gateway → ALB → Go 分层判断
+
+先调用公开 health 并记录请求 ID：
+
+```bash
+curl --fail-with-body --silent --show-error \
+  https://<API_ID>.execute-api.us-east-2.amazonaws.com/healthz
+```
+
+判断顺序：
+
+1. API access log 有 `integrationError`：检查 VPC Link、Listener ARN、VPC Link SG → ALB SG。
+2. API 正常转发但 Go 5xx：看 target 5xx 与 Go log。
+3. Target unhealthy：看 Task IP注册、ALB SG → Task SG、8080和 health handler。
+4. health 200、ready 503：进程存活，聚焦 RDS DNS、SG、CA、hostname verify、pool。
+
+Internal ALB 不能从公网直接 curl。使用 API Gateway，或在 VPC 内受控诊断环境访问。
+
+## 5. Lambda → Cloud Map 单独失败
+
+如果公开 GET 正常而 tRPC generate 失败，ALB 链路已经无关。检查：
+
+- ECS Service 是否仍有 `ServiceRegistries`。
+- Cloud Map instance IP 是否等于当前 running Task ENI。
+- Lambda 与 Task 是否同 VPC。
+- VPC DNS support/hostnames 是否为 true。
+- Lambda SG → Task SG 的 8080。
+- `GO_API_INTERNAL_URL` 是否仍是私有 DNS。
+
+## 6. Production 自动回滚
+
+三层保护：
+
+1. 测试失败：没有 image-ready marker，不调用 deploy。
+2. 新 Task 无法稳定：ECS deployment circuit breaker + CloudFormation rollback。
+3. Service stable 但 smoke test失败：部署脚本恢复上一 `ImageTag`。
+
+人工恢复时不要覆盖 ECR tag。先记录失败 build、新旧 SHA、Task revision 和 events，然后让 CloudFormation重新引用曾经稳定的不可变 tag。
+
+更新现有 stack 的回滚示意：
+
+```bash
+aws cloudformation deploy \
+  --region us-east-2 \
+  --stack-name github-account-info-go-production \
+  --template-file infra/go-production.yaml \
+  --parameter-overrides \
+    ImageTag=prod-<PREVIOUS_STABLE_SHA> \
+    CorsOrigins=https://<PRODUCTION_HOST>
+
+aws ecs wait services-stable \
+  --region us-east-2 \
+  --cluster github-account-info-go \
+  --services github-account-info-go-production
+```
+
+之后重新验证 health、ready、公开 GET 和 Node tRPC。人工命令必须保留 stack 的其它实际参数；执行前先用 `describe-stacks`读取当前参数，不要依赖教程默认值。
+
+## 7. Preview TTL 兜底
+
+正常清理由 PR close/merge webhook 触发。为了处理 webhook 丢失，EventBridge 每天 03:00 UTC 启动 NO_SOURCE、非 privileged 的 TTL cleanup project。
+
+扫描器只处理同时满足：
+
+- `Project=<PROJECT_NAME>`。
+- `Environment=preview`。
+- `ExpiresAt` 是有效且已经过期的 UTC 时间。
+- Stack 名严格匹配 `<PROJECT_NAME>-pr-<1..49999>`。
+
+它不会直接实现另一套删除逻辑，而是以 `PULL_REQUEST_CLOSED`启动已经验收的 Preview cleanup build并等待成功。
+
+手动测试空扫描：
+
+```bash
+aws codebuild start-build \
+  --region us-east-2 \
+  --project-name github-account-info-go-preview-ttl-cleanup
+```
+
+无过期 stack 时应成功输出 `No tagged preview stacks were found`，且不会触发任何 preview cleanup。
+
+## 8. ECR 与 retained Task Definition
+
+- ECR lifecycle 清理超过 14 天的 PR/旧镜像，避免无限增长。
+- Preview Task Definition 暂时 Retain，因为 `ecs:DeregisterTaskDefinition` 无法按 ARN安全收紧给执行 PR 源码的角色。
+- Retained revision 不运行，不产生 Fargate 计算费用，但会占配额。
+- 只能由可信管理员按 `infra/RUNBOOK.md`审计 family、tags 和 active service 引用后再注销。
+
+不要为了自动清理方便，给 Preview CodeBuild Role 添加通配 task-definition 注销权限。
+
+## 9. 删除 stack 的依赖顺序
+
+如果将来完整拆除 Go 平台，应按依赖反向操作：
+
+```text
+所有 PR stack
+→ CodeBuild stack
+→ production runtime stack
+→ API Gateway 中 Go VPC Link integration
+→ IAM stack
+→ foundation stack
+```
+
+Foundation exports 被下游 stack 引用时不能删除。ECR repository 与 Log Group 可能因 retention policy 保留，需要最后单独审查，不能用宽泛递归删除命令。
+
+## 本阶段完成标准
+
+- [ ] 五类关键告警存在，必要时已接 SNS。
+- [ ] 能从 API → VPC Link → ALB → Task → RDS逐层定位。
+- [ ] 知道自动回滚在哪个失败阶段生效。
+- [ ] TTL 空扫描不会误删资源。
+- [ ] ECR lifecycle 已启用。
+- [ ] Preview Role 没有通配注销 Task Definition 权限。
+- [ ] 完整拆除遵循反向依赖顺序。

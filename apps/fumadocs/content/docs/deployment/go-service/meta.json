@@ -1,0 +1,17 @@
+{
+  "title": "Go 服务部署",
+  "icon": "Container",
+  "pages": [
+    "index",
+    "01-application-and-container",
+    "02-database-and-secrets",
+    "03-shared-foundation",
+    "04-production-ecs",
+    "05-api-gateway-and-service-discovery",
+    "06-production-cicd",
+    "07-pr-preview",
+    "08-monitoring-cleanup-and-rollback",
+    "09-troubleshooting",
+    "10-checklists"
+  ]
+}

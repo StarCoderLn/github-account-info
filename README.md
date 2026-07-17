@@ -2,8 +2,6 @@
 
 基于 Turborepo + pnpm workspaces 的 monorepo 项目，用于管理多个 GitHub 账号的个人信息。通过 GitHub Personal Access Token（PAT）拉取账号数据，支持在线编辑并持久化保存到数据库。
 
-![Go 个人介绍平台部署架构](docs/go-profile-platform.svg)
-
 ## 功能特性
 
 - **Token 管理**：添加多个 GitHub PAT，以账号卡片形式展示（头像 + 用户名 + 统计数据），通过卡片按钮选择后续操作

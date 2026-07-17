@@ -1,0 +1,71 @@
+---
+title: 当前部署全景
+description: 浏览器、Node Lambda、Go ECS 服务、数据库与两套 CI/CD 链路的关系
+icon: Network
+---
+
+## 最终架构
+
+项目采用渐进式拆分，而不是一次性重写：原 Node Lambda 继续负责账号管理、GitHub PAT 调用和 tRPC；Go 服务负责个人介绍生成、保存和公开读取。
+
+```mermaid
+flowchart LR
+  Browser[浏览器] --> CF[Cloudflare Pages]
+  Browser --> APIGW[API Gateway HTTP API]
+  APIGW -->|/trpc/*| Lambda[Node Lambda]
+  APIGW -->|/api/v1/*<br/>/healthz /readyz| Link[VPC Link]
+  Link --> ALB[Internal ALB]
+  ALB --> Go[Go API on ECS/Fargate]
+  Lambda -->|Cloud Map 私有 DNS<br/>/internal/v1/*| Go
+  Lambda --> RDS[(RDS PostgreSQL)]
+  Go --> RDS
+  Lambda -->|经 NAT| GitHub[GitHub REST API]
+```
+
+![Go 个人主页平台部署架构](./go-service/assets/go-profile-platform.png)
+
+## 三条业务请求链路
+
+### 账号管理
+
+```text
+浏览器 → API Gateway /trpc/* → Node Lambda → GitHub API / RDS
+```
+
+GitHub PAT 只存在于浏览器到 Node Lambda 的请求头中。Go 服务永远不接收 PAT，也不会重新调用 GitHub 获取用户名。
+
+### 生成个人介绍
+
+```text
+浏览器 → tRPC mutation → Node Lambda
+       → Cloud Map: go-api.github-account-info.local:8080
+       → Go POST /internal/v1/introductions → RDS
+```
+
+内部写接口没有配置到 API Gateway，因此公网不存在 `/internal/*` route。Cloud Map 提供稳定服务名，ECS Task 更换私有 IP 后，Lambda 不需要更新配置。
+
+### 公开读取个人介绍
+
+```text
+浏览器 → API Gateway /api/v1/* → VPC Link
+       → Internal ALB → Go ECS Task → RDS
+```
+
+Internal ALB 没有公网地址。API Gateway 是公开入口，VPC Link 负责进入 VPC。
+
+## 部署链路
+
+| 目标 | 触发方式 | 构建平台 | 最终产物 |
+| --- | --- | --- | --- |
+| Web production/preview | Git push / Pull Request | Cloudflare Pages | Vite 静态资源 |
+| Node Lambda | master 指定路径变更 | GitHub Actions + SAM | Lambda bundle 与 API 配置 |
+| Go production | master 指定路径变更 | AWS CodeBuild | ECR SHA 镜像 + ECS revision |
+| Go PR preview | PR 生命周期事件 | AWS CodeBuild | 独立 schema、Target Group、ECS Service 与 ALB rule |
+
+## 从哪里开始
+
+- 想直观看完整系统或对比历史版本：打开 [架构图总览](/docs/deployment/architecture-gallery)，现有架构图都集中在那里。
+- 第一次了解项目：先读本页，再读 [Go 服务：目标与路线](/docs/deployment/go-service)。
+- 重建 Node 部署：读 [Node Lambda 部署实录](/docs/deployment/node-lambda)。
+- 操作 Go production：按 Go 教程左侧顺序阅读，不要直接跳到 CodeBuild。
+- 线上故障：先看 Go 教程的排障章节，再按 `infra/RUNBOOK.md` 执行当前命令。

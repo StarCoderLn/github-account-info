@@ -1,13 +1,41 @@
 ---
-title: Hello World
-description: Your first document
+title: 项目知识库
+description: github-account-info 的架构、部署、CI/CD 与故障排查笔记
+icon: BookOpen
 ---
 
-Welcome to the docs! You can start writing documents in `/content/docs`.
+这里记录 `github-account-info` 从本地全栈项目演进到 AWS 多服务部署平台的完整过程。文档的目标不是只保存最终配置，而是让以后忘记细节时，仍能理解每个决定并重新完成操作。
 
-## What is Next?
+<Callout title="阅读原则">
+  命令中的 `<PLACEHOLDER>` 必须替换成你自己的资源标识。数据库连接串、PAT、Secret value 和访问密钥不得写入文档、Git、命令历史或聊天记录。
+</Callout>
+
+## 推荐学习顺序
 
 <Cards>
-  <Card title="Learn more about Next.js" href="https://nextjs.org/docs" />
-  <Card title="Learn more about Fumadocs" href="https://fumadocs.dev" />
+  <Card
+    title="部署全景"
+    description="先理解 Node、Go、Cloudflare、API Gateway、ECS 与 RDS 如何协作。"
+    href="/docs/deployment"
+  />
+  <Card
+    title="Node Lambda 部署实录"
+    description="学习项目最初如何从本地服务迁移到 Lambda + RDS。"
+    href="/docs/deployment/node-lambda"
+  />
+  <Card
+    title="Go 服务部署教程"
+    description="从容器化开始，逐步搭建 ECS、ALB、VPC Link、CI/CD 和 PR Preview。"
+    href="/docs/deployment/go-service"
+  />
 </Cards>
+
+## 文档与事实来源
+
+- 本知识库解释架构、操作顺序、验证方法与踩坑原因。
+- `infra/*.yaml` 是 AWS 基础设施的事实来源。
+- `packages/db/src/migrations/` 是生产数据库结构的事实来源。
+- `specs/4.go-profile-platform/` 保存需求、设计决策和真实验收记录。
+- `infra/RUNBOOK.md` 保存线上日常运维与故障处置命令。
+
+当教程与代码出现差异时，先检查代码和 CloudFormation，再更新教程；不要为了匹配旧文档而回退已经验证的安全边界。

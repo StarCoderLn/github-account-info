@@ -1,4 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1040" font-family="Inter,'PingFang SC','Microsoft YaHei',Arial,sans-serif">
+  <title>github-account-info Go 个人主页与容器平台架构</title>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0 0L10 5L0 10Z" fill="#334155"/>

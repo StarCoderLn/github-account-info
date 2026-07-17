@@ -1,0 +1,154 @@
+---
+title: 10. 从零操作与验收清单
+description: 忘记细节时按这一页恢复顺序，再回到对应章节查看解释和命令
+icon: ListChecks
+---
+
+这是一张路线图，不替代前面章节。遇到任何失败，不要继续勾后面的项目；回到对应章节完成诊断。
+
+## A. 本地应用
+
+- [ ] `gofmt -l .` 无输出。
+- [ ] `go mod verify`、`go vet ./...`、`go test ./...`通过。
+- [ ] 本地进程 `/healthz` 和 `/readyz` 都是 200。
+- [ ] 内部 POST 不接受 token/PAT字段。
+- [ ] 公开 DTO不包含 email、DB id和Secret。
+- [ ] linux/amd64镜像构建成功。
+- [ ] Runtime user 为 `65532:65532`。
+- [ ] Runtime image不含源码、编译器、`.env`。
+- [ ] Production RDS TLS 强制 CA与hostname校验。
+
+## B. Production 数据库
+
+- [ ] SSM隧道监听 `127.0.0.1:15432`。
+- [ ] 使用 `migrate-production-via-tunnel.sh`隐藏读取连接串。
+- [ ] 目标 database校验为 `github_account_info`。
+- [ ] `profile_introduction`存在。
+- [ ] Drizzle migration journal 已更新。
+- [ ] Production Secret只保存在 Secrets Manager。
+
+## C. Preview 数据库
+
+- [ ] 独立 `github_account_info_preview` database与用户存在。
+- [ ] Preview用户不能读取 production表。
+- [ ] Preview Secret ARN与production不同。
+- [ ] Schema只允许 `pr_<1..49999>`。
+- [ ] Seed只包含虚构、非敏感数据。
+
+## D. 网络盘点
+
+- [ ] Lambda、RDS、Go平台位于同一 VPC。
+- [ ] 两个私有子网来自不同 AZ，`MapPublicIpOnLaunch=false`。
+- [ ] 私有子网有 NAT或ECR/Logs/Secrets endpoints。
+- [ ] RDS保持非公网。
+- [ ] VPC `enableDnsSupport`和`enableDnsHostnames`均为 true。
+- [ ] ECS service-linked role可用。
+
+## E. Foundation 与 IAM
+
+- [ ] `go-foundation.yaml`与`go-iam.yaml`通过 SAM lint和AWS validate。
+- [ ] 参数文件只含资源 ID/ARN，不含 Secret value。
+- [ ] Change set逐项审查后才执行。
+- [ ] Internal ALB位于两个私有子网。
+- [ ] ECR immutable tag与lifecycle启用。
+- [ ] Go Task SG只接受 ALB SG/Lambda SG的8080。
+- [ ] RDS SG只接受 Go Task SG的5432。
+- [ ] IAM stack恰好四个隔离角色。
+- [ ] Foundation阶段没有运行 Fargate Task。
+
+## F. 首次 Production ECS
+
+- [ ] Worktree干净，镜像 tag等于完整 commit SHA。
+- [ ] ECR API返回有效 digest。
+- [ ] Production change set无新VPC/RDS/public ALB/IAM Role。
+- [ ] Task使用Fargate、私有子网、无public IP。
+- [ ] Secret通过Task Definition `Secrets`注入。
+- [ ] Root filesystem只读，用户65532。
+- [ ] ECS desired/running/pending为 `1/1/0`。
+- [ ] ALB target healthy。
+- [ ] Cloud Map只注册production Task。
+- [ ] Logs不包含Secret或用户敏感数据。
+
+## G. API Gateway 与内部调用
+
+- [ ] 原HTTP API ID没有replacement。
+- [ ] VPC Link为`AVAILABLE`。
+- [ ] route清单只有约定的Node/Go route。
+- [ ] 公网不存在`/internal/*`。
+- [ ] `/healthz`、`/readyz`为200。
+- [ ] 不存在用户的公开GET为契约化JSON 404。
+- [ ] Production Origin OPTIONS为204并返回精确Origin。
+- [ ] Node根路径和tRPC仍为200。
+- [ ] Lambda通过Cloud Map生成成功。
+- [ ] 第二次生成命中cache。
+- [ ] Force deployment更换Task IP后Lambda仍成功。
+
+## H. Production CI/CD
+
+- [ ] CodeConnection为AVAILABLE且GitHub App已安装到目标仓库。
+- [ ] Production webhook只允许master push+指定路径。
+- [ ] Builder从`ARG GO_IMAGE`读取且固定digest。
+- [ ] Build成功前没有deploy。
+- [ ] ECR marker验证后才deploy。
+- [ ] ECR、stack与Task revision使用同一SHA。
+- [ ] ECS stable后执行health/ready smoke。
+- [ ] Smoke失败能恢复上一image tag。
+- [ ] 失败build不替换production stable revision。
+
+## I. PR Preview
+
+- [ ] CodeBuild与Cloudflare使用同一完整head SHA。
+- [ ] Preview key为`preview-<12位sha>`。
+- [ ] PR number独立验证为1～49999。
+- [ ] PR代码执行需要comment approval。
+- [ ] Preview Role不能读取production Secret。
+- [ ] 第一次deploy固定为`RoutingEnabled=false/DesiredCount=0`。
+- [ ] Database create task exit 0后才启用route。
+- [ ] 每个PR使用独立Target Group、Service、Listener Rule和schema。
+- [ ] 两个并发PR的header流量和数据不串。
+- [ ] 不带header不会进入preview。
+- [ ] Cloudflare两个Preview URL都返回200。
+
+## J. 清理与监控
+
+- [ ] PR close/merge先断route和Service。
+- [ ] Drop命令要求精确`--confirm-schema`。
+- [ ] Stack、Service、Rule、Target Group和schema均消失。
+- [ ] Production health在清理后仍正常。
+- [ ] TTL cleanup按Project/Environment/ExpiresAt/Stack name四重筛选。
+- [ ] 空TTL扫描不会触发删除。
+- [ ] ECR lifecycle为14天。
+- [ ] ALB/ECS/API Gateway告警存在。
+- [ ] 需要通知时SNS subscription已确认。
+- [ ] Retained Task Definition只由可信管理员审计清理。
+
+## 常用本地验证命令
+
+```bash
+pnpm check:infra
+pnpm --filter go-api test
+pnpm --filter go-api build
+pnpm --filter server check-types
+pnpm --filter web check-types
+pnpm --filter web build
+git diff --check
+```
+
+如果脚本名称随仓库演进发生变化，以各 package 的 `package.json` 为准。
+
+## 最终验收证据
+
+一次完整验收应能回答：
+
+1. 当前production完整image SHA和digest是什么？
+2. ECS当前running Task、Task Definition revision和私有IP是什么？
+3. ALB与Cloud Map是否只指向当前Task？
+4. API Gateway公开route是否恰好符合边界？
+5. Node tRPC与Go health/ready/public GET是否同时正常？
+6. Preview Role/Task是否无法读取production Secret？
+7. 两个并发PR是否真正隔离？
+8. PR关闭后资源和schema是否真实删除？
+9. 失败build和smoke失败是否都不会留下错误stable版本？
+10. 日志与验收记录是否没有任何Secret和用户敏感数据？
+
+这些问题都有证据后，部署才算完成，而不是“CloudFormation显示绿色”就算完成。
