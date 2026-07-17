@@ -49,7 +49,7 @@ type MergedCard = {
 	publicRepos: number;
 	followers: number;
 	following: number;
-	label: string;
+	timestampLabel: "添加于" | "更新于";
 	timestamp: string;
 	hasLocalToken: boolean;
 	localTokenId: string | undefined;
@@ -80,7 +80,6 @@ function toAccountPayload(account: GithubAccount) {
 function TokenPage() {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
-	const [name, setName] = useState("");
 	const [token, setToken] = useState("");
 	const [tokens, setTokens] = useState<SavedToken[]>([]);
 	const [generatingCardKey, setGeneratingCardKey] = useState<string | null>(
@@ -109,8 +108,8 @@ function TokenPage() {
 			publicRepos: r.publicRepos,
 			followers: r.followers,
 			following: r.following,
-			label: localToken?.name ?? r.login,
-			timestamp: formatDate(new Date(r.updatedAt)),
+			timestampLabel: localToken ? "添加于" : "更新于",
+			timestamp: localToken?.createdAt ?? formatDate(new Date(r.updatedAt)),
 			hasLocalToken: !!localToken,
 			localTokenId: localToken?.id,
 			dbId: r.id,
@@ -128,7 +127,7 @@ function TokenPage() {
 			publicRepos: t.publicRepos,
 			followers: t.followers,
 			following: t.following,
-			label: t.name,
+			timestampLabel: "添加于",
 			timestamp: t.createdAt,
 			hasLocalToken: true,
 			localTokenId: t.id,
@@ -138,12 +137,7 @@ function TokenPage() {
 	const allCards = [...dbCards, ...localOnlyCards];
 
 	const handleAdd = async () => {
-		const trimmedName = name.trim();
 		const trimmedToken = token.trim();
-		if (!trimmedName) {
-			toast.error("请输入 Token 名称");
-			return;
-		}
 		if (!trimmedToken) {
 			toast.error("请输入 Token 值");
 			return;
@@ -155,7 +149,6 @@ function TokenPage() {
 			const createdAt = formatDate(now);
 			const saved: SavedToken = {
 				id,
-				name: trimmedName,
 				token: trimmedToken,
 				login: acc.login,
 				displayName: acc.name,
@@ -168,10 +161,9 @@ function TokenPage() {
 			addToken(saved);
 			setSelectedTokenId(id);
 			setTokens(getTokens());
-			setName("");
 			setToken("");
 			fetchMut.reset();
-			toast.success(`Token "${trimmedName}" 已添加`);
+			toast.success("Token 已添加");
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Token 验证失败");
 		}
@@ -272,25 +264,10 @@ function TokenPage() {
 				<h3 className="mb-4 font-medium text-gray-800">添加 Token</h3>
 				<div className="grid gap-3">
 					<div className="flex flex-col gap-1.5">
-						<label htmlFor="token-name" className="text-gray-600 text-sm">
-							名称
-						</label>
-						<input
-							id="token-name"
-							type="text"
-							placeholder="我的 GitHub Token"
-							value={name}
-							onChange={(e) => setName(e.target.value)}
-							className="rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-						/>
-					</div>
-					<div className="flex flex-col gap-1.5">
-						<label htmlFor="github-token" className="text-gray-600 text-sm">
-							Token
-						</label>
 						<input
 							id="github-token"
 							type="password"
+							aria-label="GitHub Token"
 							autoComplete="off"
 							placeholder="ghp_..."
 							value={token}
@@ -350,6 +327,9 @@ function TokenPage() {
 											{card.displayName ?? card.login}
 										</p>
 										<p className="text-gray-400 text-xs">@{card.login}</p>
+										<p className="text-gray-300 text-xs">
+											{card.timestampLabel} {card.timestamp}
+										</p>
 									</div>
 								</div>
 
@@ -416,10 +396,6 @@ function TokenPage() {
 										)}
 									</Button>
 								</div>
-
-								<p className="mt-3 text-gray-300 text-xs">
-									{card.label} · {card.timestamp}
-								</p>
 							</div>
 						))}
 					</div>
