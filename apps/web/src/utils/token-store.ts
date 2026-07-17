@@ -3,7 +3,6 @@ const SELECTED_KEY = "gh_selected_token_id";
 
 export interface SavedToken {
 	id: string;
-	name: string;
 	token: string;
 	login: string;
 	displayName: string | null;
