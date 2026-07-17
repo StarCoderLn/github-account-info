@@ -1,0 +1,178 @@
+---
+title: 6. Production CI/CD
+description: 用 CodeConnections、CodeBuild、ECR 与 CloudFormation实现测试后部署和失败回滚
+icon: Workflow
+---
+
+## 本阶段目标
+
+把手工的测试、构建、推送和 ECS 更新变成可信 `master` push 自动流水线，并保证任一安全门失败时都不会替换当前稳定版本。
+
+```mermaid
+flowchart LR
+  Push[master push<br/>指定路径] --> CB[CodeBuild]
+  CB --> Test[gofmt + verify + vet + test]
+  Test --> Image[build + ECR push<br/>prod-fullSHA]
+  Image --> Deploy[CloudFormation deploy]
+  Deploy --> Stable[ECS services-stable]
+  Stable --> Smoke[/healthz + /readyz]
+  Smoke -->|失败| Rollback[恢复上一 ImageTag]
+```
+
+## 1. 创建 GitHub CodeConnection
+
+在 AWS Console 进入 **Developer Tools → Settings → Connections**：
+
+1. 创建 GitHub connection。
+2. 完成 GitHub 授权。
+3. 安装 **AWS Connector for GitHub**。
+4. 只授权 `github-account-info` repository。
+5. 等待状态变为 `AVAILABLE`。
+6. 记录 connection ARN，不记录 OAuth token。
+
+只看到 `AVAILABLE` 还不够。如果 GitHub App 没有安装到仓库，CloudFormation 在创建 CodeBuild webhook 时仍会失败并回滚。
+
+## 2. 确认参数
+
+准备以下非 Secret 参数：
+
+```text
+GitHubConnectionArn=<connection ARN>
+PublicApiBaseUrl=https://<API_ID>.execute-api.us-east-2.amazonaws.com
+CorsOrigins=https://<PRODUCTION_HOST>
+```
+
+API base URL 不带尾斜线。Database Secret 不通过 CodeBuild 参数传递；ECS Task Definition 只引用 IAM stack 已导出的 Secret ARN。
+
+## 3. 本地验证流水线边界
+
+```bash
+sam validate --template-file infra/codebuild.yaml --lint
+aws cloudformation validate-template \
+  --region us-east-2 \
+  --template-body file://infra/codebuild.yaml
+pnpm check:infra
+bash -n infra/scripts/deploy-go-production.sh
+```
+
+静态检查应固定：
+
+- production webhook 只有 `PUSH + refs/heads/master + FILE_PATH`。
+- deploy 只能发生在 build succeeding 且 ECR marker 存在之后。
+- production role 不能管理 `pr-*` stack。
+- preview role 不能管理 production stack。
+- builder 必须从 Dockerfile 的 `ARG GO_IMAGE` 读取并包含 digest。
+
+## 4. 创建 CodeBuild change set
+
+```bash
+aws cloudformation create-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-go-codebuild \
+  --change-set-name codebuild-review \
+  --change-set-type CREATE \
+  --template-body file://infra/codebuild.yaml \
+  --parameters \
+    ParameterKey=GitHubConnectionArn,ParameterValue=<CONNECTION_ARN> \
+    ParameterKey=PublicApiBaseUrl,ParameterValue=<API_GATEWAY_BASE_URL> \
+    ParameterKey=CorsOrigins,ParameterValue=<PRODUCTION_ORIGIN> \
+  --capabilities CAPABILITY_IAM \
+  --description 'Trusted production and approved PR CodeBuild projects'
+```
+
+虽然模板不新建四个核心 role，但会把 connection-use 等 inline policy 附加到既有角色，所以需要 `CAPABILITY_IAM`。
+
+审查时预期：production/preview/TTL cleanup CodeBuild project、各自 log group、webhook 与受限 policy。确认 production filter 只接受 master push；PR 事件只进入 preview project。
+
+执行并等待：
+
+```bash
+aws cloudformation execute-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-go-codebuild \
+  --change-set-name codebuild-review
+
+aws cloudformation wait stack-create-complete \
+  --region us-east-2 \
+  --stack-name github-account-info-go-codebuild
+```
+
+## 5. 理解 buildspec 的三段安全门
+
+### PRE_BUILD
+
+- 使用 `CODEBUILD_RESOLVED_SOURCE_VERSION`，必须是完整40位 lowercase SHA。
+- 构造 `prod-<SHA>`，不接受 branch 名或短 SHA。
+- 解析并拉取 digest-pinned Go builder。
+- 登录 ECR。
+
+### BUILD
+
+- 在固定 builder 中执行 gofmt、module verify、vet、test。
+- 构建 linux/amd64 镜像并校验非 root 用户。
+- 推送 ECR，并用 `describe-images`验证 digest。
+- 最后才创建 `.codebuild-production-image-ready` marker。
+
+### POST_BUILD
+
+- `CODEBUILD_BUILD_SUCCEEDING` 必须为 1。
+- marker 必须存在。
+- 调用 `deploy-go-production.sh` 更新 CloudFormation。
+- 等待 ECS stable，再 smoke test health/ready。
+
+`finally` 无论成功失败都会删除 marker，防止后续步骤错误复用。
+
+## 6. 验证首次自动部署
+
+向 master 推送一个命中路径过滤的、已经测试的改动。观察：
+
+```bash
+aws codebuild list-builds-for-project \
+  --region us-east-2 \
+  --project-name <PRODUCTION_PROJECT_NAME> \
+  --sort-order DESCENDING \
+  --max-items 5
+
+aws codebuild batch-get-builds \
+  --region us-east-2 \
+  --ids <BUILD_ID> \
+  --query 'builds[0].{Status:buildStatus,SourceVersion:resolvedSourceVersion,Phases:phases[].{Type:phaseType,Status:phaseStatus}}' \
+  --output json
+```
+
+验收：
+
+1. resolved source 是预期 commit。
+2. 所有 phase 为 succeeded。
+3. ECR 出现相同 SHA tag。
+4. production stack `ImageTag` 更新为相同 tag。
+5. ECS Task Definition revision 增加，Service stable。
+6. ALB target healthy。
+7. health、ready、Node root 和 tRPC 都继续 200。
+
+## 7. 验证失败不会部署
+
+不要向 master 故意提交坏代码。可以从历史中的真实失败理解安全门：
+
+- builder 解析错误发生在 PRE_BUILD：没有 ECR tag，production 完全不变。
+- 权限缺失发生在 POST_BUILD：镜像存在，但 CloudFormation/ECS 仍保持旧 revision。
+- smoke test 失败：更新部署恢复上一 `ImageTag`；首次部署则删除失败 runtime stack。
+
+判断流水线安全不能只看“失败了”，而要检查失败后 production stack 参数、Task Definition revision、running task 和 target health 是否仍指向稳定版本。
+
+## 8. 回滚机制
+
+`deploy-go-production.sh` 在更新前读取旧 `ImageTag`。部署后：
+
+- CloudFormation/ECS 稳定失败：deployment circuit breaker 与 stack rollback 处理。
+- Service stable 但 health/ready smoke 失败：脚本重新部署旧 `ImageTag`并等待 stable。
+- 首次 runtime stack smoke 失败：删除失败的首次 stack，避免残留半可用 Service。
+
+## 本阶段完成标准
+
+- [ ] Connection 与 GitHub App repository 授权都有效。
+- [ ] production webhook 只匹配可信 master 指定路径。
+- [ ] build/test/push 成功前不会调用 deploy。
+- [ ] ECR、stack 参数和 Task revision 使用同一完整 SHA。
+- [ ] 自动部署后 Go 与原 Node 链路都通过 smoke test。
+- [ ] 已通过真实或受控证据证明失败构建不会替换 stable revision。

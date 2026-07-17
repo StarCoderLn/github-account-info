@@ -2,7 +2,7 @@
 
 本目录是 Go API AWS 基础设施的事实来源。阶段 5 开始采用“Codex 指导、用户操作、共同验收”：模板可以在本地编写和验证，但任何 change set 创建、执行、部署或删除都由用户亲自操作。
 
-整体运行与部署链路见 [`docs/go-profile-platform.svg`](../docs/go-profile-platform.svg)。
+整体运行与部署链路见 [`go-profile-platform.svg`](../apps/fumadocs/content/docs/deployment/go-service/assets/go-profile-platform.svg)，分步骤教程见 Fumadocs 的 `deployment/go-service` 章节。
 
 ## 文件边界
 

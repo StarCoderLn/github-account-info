@@ -1,0 +1,216 @@
+---
+title: 3. Shared Foundation 与 IAM
+description: 创建 ECR、ECS Cluster、Cloud Map、Internal ALB、Security Groups 和四角色权限边界
+icon: Blocks
+---
+
+## 本阶段目标
+
+创建 production 与所有 PR 环境共享的固定基础设施，但暂时不启动 Fargate Task。模板分为：
+
+- `infra/go-foundation.yaml`：网络引用、ECR、Cluster、Cloud Map、Internal ALB、Log Group、Security Groups。
+- `infra/go-iam.yaml`：production/preview 各自的 CodeBuild Role 和 ECS Execution Role，共四个角色。
+
+拆分后，可以先审查资源和网络成本，再单独审查敏感 IAM 权限。
+
+## 1. 确认 AWS 身份
+
+```bash
+aws sts get-caller-identity
+```
+
+只确认 account 和 ARN 是否正确，不输出本地 access key。所有命令显式使用 `--region us-east-2`，避免在错误 region 创建同名资源。
+
+## 2. 读取现有 Lambda 网络
+
+```bash
+aws lambda get-function-configuration \
+  --region us-east-2 \
+  --function-name github-account-info-api \
+  --query 'VpcConfig.{VpcId:VpcId,SubnetIds:SubnetIds,SecurityGroupIds:SecurityGroupIds}' \
+  --output json
+```
+
+记录 VPC ID、私有子网和 Lambda SG。Go 平台必须复用同一 VPC，Lambda 才能通过 Cloud Map 私有 DNS访问 Task。
+
+## 3. 选择两个私有子网
+
+```bash
+aws ec2 describe-subnets \
+  --region us-east-2 \
+  --filters Name=vpc-id,Values=<VPC_ID> \
+  --query 'Subnets[].{SubnetId:SubnetId,AZ:AvailabilityZone,PublicIPv4:MapPublicIpOnLaunch,Cidr:CidrBlock}' \
+  --output table
+```
+
+选择两个不同 AZ 且 `PublicIPv4=false` 的子网。然后在 VPC Console 检查 route table：必须能通过 NAT 访问 ECR、CloudWatch Logs 与 Secrets Manager，或者已经配置相应 VPC endpoints。
+
+如果只有一个合格私有子网，应先补网络，不要用公网子网凑数。Internal ALB 要求至少两个 AZ。
+
+## 4. 确认 RDS 与 ECS service-linked role
+
+```bash
+aws rds describe-db-instances \
+  --region us-east-2 \
+  --query 'DBInstances[].{Identifier:DBInstanceIdentifier,VpcId:DBSubnetGroup.VpcId,SecurityGroups:VpcSecurityGroups[].VpcSecurityGroupId,PubliclyAccessible:PubliclyAccessible}' \
+  --output table
+
+aws iam get-role \
+  --role-name AWSServiceRoleForECS \
+  --query 'Role.{RoleName:RoleName,Arn:Arn}' \
+  --output table
+```
+
+RDS VPC 必须与 Lambda 相同，production 目标应保持 `PubliclyAccessible=false`。若 ECS service-linked role 不存在，用户需要允许 ECS 首次创建，或显式创建：
+
+```bash
+aws iam create-service-linked-role \
+  --aws-service-name ecs.amazonaws.com
+```
+
+## 5. 确认 VPC DNS 属性
+
+```bash
+aws ec2 describe-vpc-attribute \
+  --region us-east-2 \
+  --vpc-id <VPC_ID> \
+  --attribute enableDnsSupport
+
+aws ec2 describe-vpc-attribute \
+  --region us-east-2 \
+  --vpc-id <VPC_ID> \
+  --attribute enableDnsHostnames
+```
+
+两项必须为 `Value: true`。Cloud Map private DNS 背后依赖 Route 53 Private Hosted Zone；缺少任一属性，都可能出现“安全组和 Task 都正常，但 Lambda 解析不到服务名”的 503。
+
+## 6. 准备本地参数文件
+
+复制 example：
+
+```bash
+cp infra/parameters/go-foundation.example.json \
+  infra/parameters/go-foundation.local.json
+
+cp infra/parameters/go-iam.example.json \
+  infra/parameters/go-iam.local.json
+```
+
+填写 foundation 文件中的 VPC、两个私有子网、Lambda SG、RDS SG；填写 IAM 文件中的 production/preview Secret ARN。local 参数文件被 Git 忽略，但仍禁止写 Secret value。
+
+## 7. 本地验证模板
+
+```bash
+sam validate --template-file infra/go-foundation.yaml --lint
+sam validate --template-file infra/go-iam.yaml --lint
+
+aws cloudformation validate-template \
+  --region us-east-2 \
+  --template-body file://infra/go-foundation.yaml
+
+aws cloudformation validate-template \
+  --region us-east-2 \
+  --template-body file://infra/go-iam.yaml
+```
+
+`validate-template` 只验证模板语法和声明，不证明子网、SG 方向和 Secret 权限在运行时正确。
+
+## 8. 创建并审查 foundation change set
+
+```bash
+aws cloudformation create-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-go-foundation \
+  --change-set-name foundation-review \
+  --change-set-type CREATE \
+  --template-body file://infra/go-foundation.yaml \
+  --parameters file://infra/parameters/go-foundation.local.json \
+  --description 'Shared Go platform foundation; review before execution'
+```
+
+查看变化：
+
+```bash
+aws cloudformation describe-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-go-foundation \
+  --change-set-name foundation-review \
+  --query '{Status:Status,ExecutionStatus:ExecutionStatus,Changes:Changes[].ResourceChange.{Action:Action,LogicalId:LogicalResourceId,Type:ResourceType,Replacement:Replacement}}' \
+  --output json \
+  --no-cli-pager
+```
+
+重点核对：
+
+- ALB 是 `internal`，位于两个私有子网。
+- ECR 开启 immutable tags 和 lifecycle。
+- foundation 不包含 `AWS::IAM::Role`。
+- Go Task SG 只接受 ALB SG 与 Lambda SG 的 8080。
+- RDS 只新增来自 Go Task SG 的 5432。
+
+确认后执行：
+
+```bash
+aws cloudformation execute-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-go-foundation \
+  --change-set-name foundation-review
+
+aws cloudformation wait stack-create-complete \
+  --region us-east-2 \
+  --stack-name github-account-info-go-foundation
+```
+
+## 9. 创建并审查 IAM change set
+
+Foundation 成功后，IAM 模板才能通过 exports 引用 ECR、Cluster、Listener 和 Log Group。
+
+```bash
+aws cloudformation create-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-go-iam \
+  --change-set-name iam-review \
+  --change-set-type CREATE \
+  --template-body file://infra/go-iam.yaml \
+  --parameters file://infra/parameters/go-iam.local.json \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --description 'Four isolated Go platform IAM roles; review before execution'
+```
+
+预期恰好四个角色：
+
+| Role | 允许 | 禁止 |
+| --- | --- | --- |
+| Production Execution | ECR pull、Logs、production Secret | preview/其它 Secret |
+| Preview Execution | ECR pull、Logs、preview Secret | production Secret |
+| Production CodeBuild | production stack、ECR push、Pass production role | PR stack、preview role |
+| Preview CodeBuild | `pr-*` stack、ECR push、Pass preview role | production stack/role/Secret |
+
+查看和执行方式与 foundation 相同，但执行时保留 stack 名 `github-account-info-go-iam`。
+
+## 10. 验证 shared resources
+
+```bash
+aws cloudformation describe-stacks \
+  --region us-east-2 \
+  --stack-name github-account-info-go-foundation \
+  --query 'Stacks[0].{Status:StackStatus,Outputs:Outputs}' \
+  --output json
+
+aws cloudformation list-stack-resources \
+  --region us-east-2 \
+  --stack-name github-account-info-go-iam \
+  --query 'StackResourceSummaries[].{Type:ResourceType,Status:ResourceStatus}' \
+  --output table
+```
+
+Foundation 完成后 Internal ALB 会持续计费，即使没有 Task；ECS Cluster 本身不会启动计算，直到下一阶段创建 Service。
+
+## 本阶段完成标准
+
+- [ ] Foundation 与 IAM stack 均为 `CREATE_COMPLETE`/`UPDATE_COMPLETE`。
+- [ ] Internal ALB 无公网地址且跨两个私有 AZ。
+- [ ] ECR、Cluster、Cloud Map、Log Group 和分层 SG 已创建。
+- [ ] IAM 资源恰好是四个职责隔离的角色。
+- [ ] production/preview Execution Role 只能读取各自 Secret。
+- [ ] 尚未启动 Fargate Task。

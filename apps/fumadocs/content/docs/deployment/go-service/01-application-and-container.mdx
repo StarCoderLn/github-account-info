@@ -1,0 +1,168 @@
+---
+title: 1. Go 应用与容器化
+description: 本地启动、API 边界、测试、多阶段镜像和容器安全验收
+icon: Container
+---
+
+## 本阶段目标
+
+先证明 Go 服务本身可靠，再引入 AWS。完成后应得到一个可在本地运行、测试通过、Linux amd64 可执行、非 root 且不含源码和凭证的容器镜像。
+
+## 1. 理解代码边界
+
+```text
+apps/go-api/
+├── cmd/api/                 # HTTP 服务入口
+├── cmd/preview-db/          # PR schema 创建/删除的一次性任务
+├── internal/config/         # 环境变量校验
+├── internal/httpapi/        # router、middleware、状态码
+├── internal/account/        # 读取已有 GitHub 账号
+├── internal/introduction/   # 生成、缓存、保存介绍
+├── internal/postgres/       # pgx pool 与 TLS
+├── certs/                   # RDS us-east-2 CA bundle
+├── Dockerfile
+├── go.mod
+└── go.sum
+```
+
+请求分层为 handler → service → repository/generator。HTTP handler 不拼 SQL，repository 不决定状态码，generator 不依赖 HTTP。这使错误分类、缓存语义和模板生成可以独立测试。
+
+## 2. 认识四个 endpoint
+
+| Method | Path | 用途 | 是否公开 |
+| --- | --- | --- | --- |
+| GET | `/healthz` | 进程存活检查，不访问 DB | 是 |
+| GET | `/readyz` | 短超时数据库 ping | 是 |
+| GET | `/api/v1/github-users/{username}/introduction` | 读取已经生成的介绍 | 是 |
+| POST | `/internal/v1/introductions` | 生成或复用介绍 | 否，只允许 VPC 内 Lambda 调用 |
+
+Go 不接收 GitHub PAT。内部 POST 输入只包含 `githubUsername` 和 `regenerate`。公开响应排除数据库内部 ID、email、PAT 和 Secret。
+
+## 3. 准备本地环境
+
+如果使用项目的 RDS SSM 隧道，在仓库根目录开两个终端：
+
+```bash title="终端 1：保持隧道前台运行"
+pnpm db:tunnel
+```
+
+创建不提交的 `apps/go-api/.env.local`：
+
+```dotenv
+APP_ENV=development
+PORT=8080
+DATABASE_URL=postgresql://USER:PASSWORD@127.0.0.1:5433/github_account_info
+DB_SCHEMA=public
+CORS_ORIGINS=http://localhost:3001
+```
+
+不要把真实连接串放进教程或 shell 参数。项目开发脚本会读取 `.env.local`。
+
+```bash title="终端 2：只启动 Go"
+pnpm dev:go
+```
+
+验证进程和数据库分别正常：
+
+```bash
+curl --fail http://localhost:8080/healthz
+curl --fail http://localhost:8080/readyz
+```
+
+预期两个请求均返回 200。若 health 成功而 ready 返回 503，说明 HTTP 服务正常，问题集中在连接串、隧道、TLS 或数据库权限。
+
+## 4. 执行质量门
+
+在 `apps/go-api` 下执行：
+
+```bash
+gofmt -l .
+go mod verify
+go vet ./...
+go test ./...
+go build -o dist/go-api ./cmd/api
+```
+
+完成标准：
+
+- `gofmt -l .` 没有输出。
+- module checksum、vet、全部测试通过。
+- `dist/go-api` 可以生成。
+- router 测试覆盖 400、404、503、500，且响应不泄露底层错误或 token。
+
+也可以从仓库根目录使用 Turborepo：
+
+```bash
+pnpm --filter go-api test
+pnpm --filter go-api build
+```
+
+## 5. 理解 Dockerfile
+
+镜像分三段：
+
+1. `dependencies`：只复制 `go.mod`/`go.sum`，下载并验证依赖，最大化缓存命中。
+2. `build`：复制源码，使用 `CGO_ENABLED=0` 构建静态 `go-api` 和 `preview-db`。
+3. `runtime`：以 `scratch` 开始，只复制两个二进制和 RDS CA bundle。
+
+builder 不是只固定 tag，而是固定到 Docker Official Image 的 manifest digest。这样同一源码不会因为上游 tag 漂移而悄悄更换编译环境。
+
+## 6. 构建本地镜像
+
+从仓库根目录执行：
+
+```bash
+docker build \
+  --platform linux/amd64 \
+  --tag github-account-info-go:local \
+  apps/go-api
+```
+
+production Fargate 当前使用 amd64，因此这里显式指定平台；在 Apple Silicon 上不指定时可能构建 arm64，随后无法在目标 Task 上运行。
+
+验证运行用户和入口：
+
+```bash
+docker image inspect \
+  --format 'user={{.Config.User}} entrypoint={{json .Config.Entrypoint}}' \
+  github-account-info-go:local
+```
+
+预期：
+
+```text
+user=65532:65532 entrypoint=["/go-api"]
+```
+
+## 7. 本地运行容器
+
+在 `apps/go-api` 中准备不提交的 `.env`，本地数据库使用 `APP_ENV=development`：
+
+```bash
+docker run --rm \
+  --env-file apps/go-api/.env \
+  --publish 8080:8080 \
+  github-account-info-go:local
+```
+
+然后重复 health/ready 请求。注意容器内的 `127.0.0.1` 是容器自身；若数据库隧道运行在宿主机，需要使用适合本机 Docker 的宿主机地址，而不是照抄本地进程连接串。
+
+## 8. 为什么 production 强制 RDS TLS
+
+镜像默认设置：
+
+```text
+APP_ENV=production
+RDS_CA_BUNDLE=/etc/ssl/certs/rds-us-east-2-bundle.pem
+```
+
+production 配置加载时要求 CA 路径是绝对路径，连接池强制 TLS 1.2+、证书链校验和 RDS hostname 校验。即使连接串误写 `sslmode=disable`，应用也不允许明文降级。
+
+## 本阶段完成标准
+
+- [ ] 本地 `/healthz` 与 `/readyz` 返回 200。
+- [ ] gofmt、module verify、vet、test、build 全部通过。
+- [ ] linux/amd64 镜像成功构建。
+- [ ] runtime 用户为 `65532:65532`。
+- [ ] 镜像不包含 `.env`、Git 元数据、Go compiler 或源码。
+- [ ] production 模式缺少 CA bundle 时启动失败，而不是降级为不校验证书。

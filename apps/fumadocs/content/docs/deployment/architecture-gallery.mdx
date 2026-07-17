@@ -1,0 +1,60 @@
+---
+title: 架构图总览
+description: 集中查看当前 Go 服务链路与历史 Node/Lambda 部署架构图
+icon: Images
+---
+
+这里集中收录项目部署文档中的全部架构图。阅读时先看“当前架构”，历史图用于理解项目是如何逐步演进到现在的，不应直接作为当前环境的部署依据。
+
+## 当前完整部署架构
+
+**适合回答：整个系统目前有哪些入口、运行时、网络链路和 CI/CD 资源？**
+
+这张图包含 Cloudflare Pages、Node Lambda、Go ECS/Fargate、API Gateway、VPC Link、Internal ALB、Cloud Map，以及 production 和 Pull Request preview 两套部署链路，是目前信息最完整的全景图。
+
+![当前完整部署架构：Node Lambda、Go ECS 服务与 CI/CD](./go-service/assets/deployment-architecture-v2.png)
+
+## 当前 Go 个人主页平台
+
+**适合回答：新增 Go 服务的请求具体怎么走？Lambda、Go 服务和数据库之间是什么关系？**
+
+这张图聚焦 Go profile platform，详细标出了公网读取、Lambda 内部写入、ECS 服务发现、数据库访问和监控链路。
+
+![当前 Go 个人主页平台部署架构](./go-service/assets/go-profile-platform.png)
+
+[查看可缩放的 SVG 原图](./go-service/assets/go-profile-platform.svg)
+
+## 历史 Node/Lambda 详细部署图
+
+> 下面三张图记录引入 Go 服务之前的 Node/Lambda 部署。它们仍可用于学习原有链路，但不包含当前 Go ECS 服务。
+
+### Node/Lambda AWS 资源与部署链路
+
+**适合回答：原 Node 服务在 AWS 内部由哪些资源组成，SAM 和 GitHub Actions 如何完成部署？**
+
+![历史 Node Lambda AWS 详细部署架构](./node-lambda/assets/deployment-architecture.png)
+
+### Node/Lambda 整体架构
+
+**适合回答：浏览器、Cloudflare Pages、API Gateway、Lambda 和 RDS 的主链路是什么？**
+
+![历史 Node Lambda 整体部署架构](./node-lambda/assets/architecture.png)
+
+[查看可缩放的 SVG 原图](./node-lambda/assets/architecture.svg)
+
+### 早期架构速记图
+
+**适合回答：需要快速回忆原 Node 部署中各模块的关系时看什么？**
+
+![历史 Node Lambda 架构速记图](./node-lambda/assets/architecture-map.png)
+
+## 怎么选择要看的图
+
+| 想了解的问题 | 推荐查看 |
+| --- | --- |
+| 当前项目的完整部署形态 | 当前完整部署架构 |
+| Go 请求、ECS 和内部网络链路 | 当前 Go 个人主页平台 |
+| 原 Node/Lambda 的 AWS 资源细节 | 历史 Node/Lambda 详细部署图 |
+| 原 Node/Lambda 的核心请求路径 | 历史 Node/Lambda 整体架构 |
+| 快速复习早期系统组成 | 早期架构速记图 |
+

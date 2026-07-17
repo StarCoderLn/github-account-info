@@ -1,4 +1,8 @@
-# 全栈项目部署踩坑与经验笔记
+---
+title: Node Lambda 部署实录
+description: 从本地 Node/Hono 服务迁移到 Lambda、RDS 与 Cloudflare Pages 的实施过程和踩坑总结
+icon: Cloud
+---
 
 > 项目：github-account-info（Turborepo + pnpm monorepo）
 > 部署拓扑：前端 Cloudflare Pages + 后端 AWS Lambda（SAM）+ 数据库 AWS RDS PostgreSQL（私有子网）
@@ -67,9 +71,9 @@
 
 ### 1.1 全景架构图
 
-![github-account-info 整体架构图](./architecture.png)
+![github-account-info 整体架构图](./assets/architecture.png)
 
-> 源文件：[architecture.svg](./architecture.svg)（矢量图，可编辑）。下面的 mermaid 版本便于在支持 mermaid 的工具里直接渲染与修改。
+> 源文件：[architecture.svg](./assets/architecture.svg)（矢量图，可编辑）。下面的 Mermaid 版本可以直接在文档站渲染与修改。
 
 ```mermaid
 flowchart TB

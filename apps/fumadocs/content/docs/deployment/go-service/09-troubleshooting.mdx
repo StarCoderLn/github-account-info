@@ -1,0 +1,172 @@
+---
+title: 9. 真实踩坑与排障方法
+description: 从症状、分层证据到根因，复盘搭建过程中真正发生过的故障
+icon: Wrench
+---
+
+这部分不是错误清单，而是训练定位方法：先确定失败发生在哪一层，再修改最小边界。浏览器最后显示的错误通常不等于真正根因。
+
+## 1. 浏览器 CORS 报错，但根因在上游
+
+**症状**：浏览器显示 CORS blocked。
+
+**判断**：使用 `curl --include`直接请求 API；查看 API Gateway access log、ALB `HTTPCode_ELB_4XX/5XX`、Target 指标和 Go access log。
+
+**原理**：如果 API Gateway、ALB 或 Lambda 在 CORS middleware 之前返回 4xx/5xx，错误响应没有 CORS header，浏览器只能把它展示成 CORS 错误。
+
+**处理顺序**：
+
+1. 确认 HTTP status 和 response body。
+2. 判断 API Gateway integration 是否失败。
+3. 区分 ALB 自己的 4xx 与 Target 4xx。
+4. 确认 Go 是否收到请求。
+5. 最后才检查 Origin allowlist。
+
+## 2. API Gateway → ALB 首次请求被 400 拒绝
+
+**证据**：`HTTPCode_ELB_4XX_Count`增加，Target 4xx 无数据，Go 日志没有请求。
+
+**根因**：Internal ALB 的 `routing.http.desync_mitigation_mode=strictest` 拒绝了 private integration 的请求形态。
+
+**修复**：将属性设为 `defensive`，再验证 health/ready/404/OPTIONS，并用 `pnpm check:infra`固定回归边界。
+
+**教训**：ALB 4xx 和 Target 4xx 是两个不同指标。请求没到应用，就不要先改应用 router。
+
+## 3. Lambda 调 Go 503，但公开 GET 正常
+
+**证据**：API Gateway → ALB → Go 正常；Lambda Cloud Map URL失败；Task/SG 看似正确。
+
+**根因**：复用 VPC 的 `enableDnsHostnames=false`。Cloud Map private DNS 无法正确解析。
+
+**修复**：显式审查并启用 `enableDnsSupport=true` 与 `enableDnsHostnames=true`，在同 VPC 诊断主机解析服务名，再重试 Lambda。
+
+**教训**：网络通不等于 DNS 通。Cloud Map 检查表必须包含 VPC DNS 属性。
+
+## 4. SSM 隧道下 `sslmode=require` 仍报证书 hostname
+
+**症状**：连接地址改成 `127.0.0.1` 后，pg 对 RDS 证书做 verify-full，hostname 不匹配。
+
+**根因**：当前 `pg`/`pg-connection-string` 对 `sslmode=require` 的默认解释与 libpq 传统语义不同；连接串选项还可能覆盖 Pool 中的 `ssl` 配置。
+
+**修复**：只在本地 SSM migration URL加入：
+
+```text
+sslmode=require&uselibpqcompat=true
+```
+
+Production ECS 直连真实 RDS hostname，继续使用完整证书和 hostname 校验，绝不能把隧道兼容参数复制到 runtime。
+
+## 5. CodeConnection AVAILABLE，但 webhook 创建失败
+
+**症状**：Connection 显示 AVAILABLE，CloudFormation 在 `AWS::CodeBuild::Project` 的 `CreateWebhook` 回滚。
+
+**根因**：只完成 OAuth connection，没有安装 AWS Connector for GitHub，或 App 未获目标 repository 权限。
+
+**修复**：在 GitHub 安装 Connector，仅授权目标仓库；清理失败空 stack 后重新创建 change set。
+
+**教训**：Connection authorization 和 GitHub App installation 是两个独立状态。
+
+## 6. Builder 安全门错误解析 Dockerfile
+
+**症状**：PRE_BUILD 提示 builder 未固定 digest，实际 Dockerfile 已固定。
+
+**根因**：脚本从 `FROM` 解析，但 builder 值定义在：
+
+```dockerfile
+ARG GO_IMAGE=...@sha256:...
+FROM ${GO_IMAGE}
+```
+
+**修复**：从 `ARG GO_IMAGE=`读取并验证 `@sha256:`。
+
+**安全收益**：失败发生在 ECR push 前，production stable revision 完全不变，证明部署门有效。
+
+## 7. 镜像已推送，POST_BUILD 缺权限
+
+**症状**：Build 与 ECR push 成功，CloudFormation deploy 前报缺少 `cloudformation:GetTemplateSummary`。
+
+**处理**：不要给 CodeBuild role 添加宽泛 CloudFormation 权限。通过 IAM change set只增加缺失的只读 action，确认角色原地更新且无新增资源，再重跑。
+
+**教训**：失败点在镜像发布后不等于 production 已更新。检查 stack 参数与 Task revision 才能判断影响。
+
+## 8. PR head SHA 推导错误
+
+**症状**：Preview Build 无法得到40位 SHA，或 tag 对应 merge commit而不是 head commit。
+
+**根因**：使用 `git rev-parse HEAD^2`假设 checkout 一定是特定形态的 merge commit。
+
+**修复**：使用 CodeBuild 在 DOWNLOAD_SOURCE 后提供的 `CODEBUILD_RESOLVED_SOURCE_VERSION`，并严格校验40位 lowercase hex。
+
+**教训**：优先使用 CI 平台明确承诺的元数据，不从不稳定 Git 拓扑猜测。
+
+## 9. `BASH_REMATCH` 跨 BuildSpec command 丢失
+
+**症状**：正则验证成功，但后续 `PRNumber` 为空，产生格式错误的镜像 tag。
+
+**根因**：BuildSpec 中相邻 command 不应假设共享正则捕获数组。
+
+**修复**：先验证 `CODEBUILD_SOURCE_VERSION=pr/<number>`，再用 `${CODEBUILD_SOURCE_VERSION#pr/}`提取，随后重新验证数字和 49999 上限。
+
+## 10. CloudFormation 拒绝 YAML anchor/alias
+
+**症状**：本地 YAML 看起来合法，但 `validate-template`或 change set 拒绝 `&PreviewTags`/`*PreviewTags`。
+
+**修复**：在 CloudFormation 模板中展开四份显式 Tags，并在静态验证中禁止重新引入 anchor/alias。
+
+**教训**：通用 YAML 语法不一定属于 CloudFormation 接受的模板子集。必须通过 AWS validator，不只通过本地 parser。
+
+## 11. Preview seed SQL 参数类型冲突
+
+**第一轮症状**：同一个 `$1` 同时用于 text 拼接和 bigint 加法，PostgreSQL 报 `bigint + text`。
+
+**错误的中间修复**：使用 `$1::text`，又导致 pgx 尝试把 Go `int`编码为 PostgreSQL text。
+
+**最终修复**：不同语义使用不同参数：
+
+```text
+$1::bigint ← Go int64 PR number
+$2::text   ← Go string introduction
+```
+
+并用 pgx type map测试按 PostgreSQL `int8` OID 编码 int64、按 `text` OID 编码 string。
+
+**教训**：只测试 SQL 字符串不够；驱动编码层的运行时类型也必须进入测试。
+
+## 12. Preview 重试意外暴露半成品
+
+**风险**：第一次创建了 stack，但 database task失败。直接重试到 `DesiredCount=1`可能先开放 route，再次遇到 schema 错误。
+
+**修复顺序**固定为：
+
+```text
+deploy false/0 → database create → exit 0 → deploy true/1
+```
+
+每次重试都先回到安全态，而不是只在首次创建时使用安全态。
+
+## 13. Cloudflare Preview initialize 超时
+
+**症状**：部署停在 initialize 约数分钟，尚未 clone/build/deploy 就失败。
+
+**判断**：相同 commit再次重试成功，CodeBuild和后端 preview均正常。
+
+**结论**：这是 Cloudflare 临时调度/初始化故障，不需要重装 GitHub App或修改应用代码。
+
+**教训**：先看失败阶段。如果还没 clone repository，代码和构建配置不是第一嫌疑。
+
+## 14. 快速定位矩阵
+
+| 现象 | 最先检查 | 不要先做 |
+| --- | --- | --- |
+| 浏览器 CORS | curl 原始 status、API/ALB日志 | 放宽 `*` |
+| API 502/503 | VPC Link状态、integrationError | 重启 Task |
+| ALB 4xx、Target无数据 | ALB attributes/request形态 | 改 Go router |
+| health 200、ready 503 | RDS DNS/SG/TLS/pool | 改 ALB health path |
+| public GET好、generate失败 | Cloud Map/VPC DNS/Lambda SG | 改 VPC Link |
+| Task pending/stopped | ECS event/stoppedReason | 连续 force deploy |
+| Preview header 404 | key、Listener Rule、Target health | 改 production rule |
+| Cloudflare initialize失败 | 平台阶段与重试结果 | 立即改源码 |
+
+## 排障完成的标准
+
+一次排障记录至少包含：时间、受影响路径、请求 ID/build ID、失败层、最小根因、修复 change set或 commit、回归验证和是否需要防回归测试。不得包含用户资料、连接串、PAT 或 Secret value。

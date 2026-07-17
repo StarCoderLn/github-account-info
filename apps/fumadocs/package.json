@@ -3,20 +3,24 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "build": "next build",
-    "dev": "next dev --port=4000",
+    "build": "next build --webpack",
+    "dev": "next dev --webpack --port=4000",
     "start": "next start",
-    "types:check": "fumadocs-mdx && next typegen && tsc --noEmit",
+    "check-types": "fumadocs-mdx && next typegen && tsc --noEmit",
     "postinstall": "fumadocs-mdx",
     "lint": "biome check",
     "format": "biome format --write"
   },
   "dependencies": {
+    "@orama/stopwords": "^3.1.18",
+    "@orama/tokenizers": "^3.1.18",
     "fumadocs-core": "16.10.5",
     "fumadocs-mdx": "15.0.12",
     "fumadocs-ui": "16.10.5",
     "lucide-react": "^1.20.0",
+    "mermaid": "^11.16.0",
     "next": "16.2.9",
+    "next-themes": "catalog:",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tailwind-merge": "^3.6.0"

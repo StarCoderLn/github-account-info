@@ -1,0 +1,93 @@
+---
+title: 目标架构与实施路线
+description: 理解为什么引入 Go、为什么选择 ECS/Fargate，以及整条部署路线的先后依赖
+icon: Route
+---
+
+## 最终目标
+
+Go 服务不是 Node 服务的全量替代，而是通过 strangler pattern 接管一个边界清晰的新能力：根据数据库中已经保存的 GitHub 账号资料生成个人介绍，并提供公开读取接口。
+
+![Go 个人主页与容器平台](./assets/go-profile-platform.png)
+
+```mermaid
+flowchart TB
+  subgraph Public[公开流量]
+    Browser[浏览器] --> APIGW[API Gateway HTTP API]
+    APIGW -->|/api/v1/*| VPCLink[VPC Link]
+    VPCLink --> ALB[Internal ALB]
+    ALB --> Go[Go ECS/Fargate]
+  end
+  subgraph Internal[私有写链路]
+    Lambda[Node Lambda] -->|Cloud Map DNS| Go
+  end
+  Go --> RDS[(RDS PostgreSQL)]
+  Lambda --> RDS
+```
+
+## 为什么不是 Lambda 或 Kubernetes
+
+| 方案 | 结论 | 原因 |
+| --- | --- | --- |
+| 第二个 Lambda | 未选择 | 无法完整练习容器、Service、负载均衡、服务发现和滚动发布 |
+| ECS/Fargate | 选择 | 不管理 EC2，仍能学习标准容器生产链路，与现有 VPC/RDS 容易衔接 |
+| EKS/Kubernetes | 未选择 | 当前只有一个 Go 服务，引入集群控制面和 Kubernetes 运维复杂度过高 |
+
+Internal ALB 与 API Gateway VPC Link 的组合让 Go Task 保持私网部署；Cloud Map 则解决 Lambda 到动态 Task IP 的内部服务发现。这两个入口服务不同的调用者，不互相替代。
+
+## 实施阶段与依赖
+
+```mermaid
+flowchart LR
+  A[1. Go 应用与容器] --> B[2. 数据库 migration 与 Secrets]
+  B --> C[3. Foundation 与 IAM]
+  C --> D[4. Production ECS]
+  D --> E[5. VPC Link 与 Cloud Map]
+  E --> F[6. Production CI/CD]
+  F --> G[7. PR Preview]
+  G --> H[8. 告警、清理与回滚]
+```
+
+不能随意交换顺序：ECS 在启动时需要 ECR、网络、Execution Role 和 Secret；API Gateway 私有集成需要已经存在的 ALB listener；CodeBuild 又必须引用已经验收的 production 模板和 IAM 边界。
+
+## 开始前准备
+
+### 本地工具
+
+```bash
+node --version
+pnpm --version
+go version
+docker version
+aws --version
+sam --version
+git --version
+```
+
+项目当前以仓库锁定的版本、Dockerfile 中固定 digest 的 Go builder 和 `pnpm-lock.yaml` 为准。不要因为本机安装了更新版本就顺手升级生产 toolchain。
+
+### AWS 前置资源
+
+开始云端阶段前，应已经有：
+
+- 一个包含至少两个 AZ 私有子网的 VPC。
+- 私网 RDS PostgreSQL 与对应安全组。
+- Node Lambda 及其安全组。
+- 私有子网到 ECR、Logs、Secrets Manager 的 NAT 出口或 VPC endpoints。
+- 能创建 CloudFormation change set 的 AWS 身份。
+
+### 安全约定
+
+<Callout type="warn" title="Secret 不进入教程和命令历史">
+  文档只记录 Secret ARN、资源状态和脱敏输出。完整 DATABASE_URL、数据库密码、GitHub PAT、Cloudflare token 和 AWS access key 都不得粘贴到终端参数、聊天或 Git。
+</Callout>
+
+- CloudFormation 是基础设施事实来源；Console 用于观察和授权，不手工制造长期漂移。
+- 先创建 change set，查看资源变化，再执行。
+- 镜像使用 `prod-<完整 Git SHA>` 或 `pr-<number>-<完整 SHA>`，禁止复用可变 `latest`。
+- production 与 preview 使用不同数据库凭证。
+- preview header 只负责路由，不是认证。
+
+## 如何使用后续章节
+
+每章都包含操作、成功信号和失败处理。第一次搭建时按顺序执行；以后复习时可先看每章的“完成标准”。线上紧急故障以 `infra/RUNBOOK.md` 的当前命令为准，本教程用于理解为什么要执行它们。

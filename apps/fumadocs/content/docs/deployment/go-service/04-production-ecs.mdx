@@ -1,0 +1,201 @@
+---
+title: 4. 首次 Production ECS
+description: 推送首个不可变镜像，创建 Task Definition、Target Group、ECS Service 并逐层验收
+icon: Server
+---
+
+## 本阶段目标
+
+把已经测试的 Go 镜像部署到私有子网中的 ECS/Fargate。完成后 Task 应能读取 Secrets Manager、连接 RDS、注册到 Internal ALB 和 Cloud Map，但此时公网 API Gateway 路由尚未接入。
+
+## 1. 提交经过审查的源码
+
+首个发布脚本要求 Git worktree 完全干净：
+
+```bash
+git status --short
+git rev-parse HEAD
+```
+
+若有 staged、unstaged 或 untracked 文件，脚本会拒绝发布。这条门的意义是确保 `prod-<SHA>` 真正对应这个 commit，而不是夹带本地未提交内容。
+
+## 2. 推送首个 ECR 镜像
+
+从仓库根目录执行：
+
+```bash
+bash infra/scripts/push-go-production-image.sh
+```
+
+脚本会按顺序：
+
+1. 从 `apps/go-api/Dockerfile` 读取 digest-pinned builder。
+2. 在相同 builder 中执行 gofmt、module verify、vet、test。
+3. 构建 `linux/amd64` 镜像。
+4. 校验 runtime user 为 `65532:65532`。
+5. 从 foundation stack output 读取 ECR URI。
+6. 通过 `get-login-password` 登录 ECR。
+7. 推送 `prod-<完整40位SHA>`。
+8. 用 ECR API 读取最终 digest。
+
+成功输出应包含 image URI 和 `sha256:<64位hex>` digest。不要只凭 `docker push` 最后一行判断成功。
+
+只读复核：
+
+```bash
+aws ecr describe-images \
+  --region us-east-2 \
+  --repository-name <ECR_REPOSITORY_NAME> \
+  --image-ids imageTag=prod-<FULL_COMMIT_SHA> \
+  --query 'imageDetails[0].{Tags:imageTags,Digest:imageDigest,PushedAt:imagePushedAt}' \
+  --output json
+```
+
+## 3. 验证 production 模板
+
+```bash
+sam validate --template-file infra/go-production.yaml --lint
+aws cloudformation validate-template \
+  --region us-east-2 \
+  --template-body file://infra/go-production.yaml
+```
+
+重点阅读这些资源：
+
+- Task Definition：256 CPU、512 MiB、readonly root filesystem、Secret injection。
+- Target Group：`ip` target、8080、`/healthz`。
+- Listener Rule：只匹配 `/api/v1/*`、`/healthz`、`/readyz`。
+- ECS Service：Fargate、无 public IP、两个私有子网、deployment circuit breaker。
+- Service Registry：注册 production Task 到 Cloud Map。
+
+## 4. 创建 production change set
+
+```bash
+aws cloudformation create-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-go-production \
+  --change-set-name production-initial-review \
+  --change-set-type CREATE \
+  --template-body file://infra/go-production.yaml \
+  --parameters \
+    ParameterKey=ImageTag,ParameterValue=prod-<FULL_COMMIT_SHA> \
+    ParameterKey=CorsOrigins,ParameterValue=https://<PRODUCTION_HOST> \
+  --description 'Initial production ECS service; review before execution'
+```
+
+查看变化列表，确认没有创建新 VPC、RDS、Internet-facing ALB 或新的 IAM Role：
+
+```bash
+aws cloudformation describe-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-go-production \
+  --change-set-name production-initial-review \
+  --query '{Status:Status,ExecutionStatus:ExecutionStatus,Changes:Changes[].ResourceChange.{Action:Action,LogicalId:LogicalResourceId,Type:ResourceType,Replacement:Replacement}}' \
+  --output json \
+  --no-cli-pager
+```
+
+确认后执行并等待：
+
+```bash
+aws cloudformation execute-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-go-production \
+  --change-set-name production-initial-review
+
+aws cloudformation wait stack-create-complete \
+  --region us-east-2 \
+  --stack-name github-account-info-go-production
+```
+
+## 5. 验证 ECS rollout
+
+```bash
+aws ecs describe-services \
+  --region us-east-2 \
+  --cluster <ECS_CLUSTER_NAME> \
+  --services <ECS_SERVICE_NAME> \
+  --query 'services[0].{Status:status,Desired:desiredCount,Running:runningCount,Pending:pendingCount,FailedTasks:failedTasks,Rollouts:deployments[].rolloutState,Events:events[0:5].message}' \
+  --output json
+```
+
+稳定状态应为：
+
+```text
+status=ACTIVE
+desired/running/pending=1/1/0
+failedTasks=0
+rollout=COMPLETED
+```
+
+若 Task 反复启动失败，先读 service events，再读 stopped task reason；不要不断 force deployment 掩盖同一个配置错误。
+
+## 6. 验证 Task 网络
+
+列出 Task 和 ENI：
+
+```bash
+aws ecs list-tasks \
+  --region us-east-2 \
+  --cluster <ECS_CLUSTER_NAME> \
+  --service-name <ECS_SERVICE_NAME>
+
+aws ecs describe-tasks \
+  --region us-east-2 \
+  --cluster <ECS_CLUSTER_NAME> \
+  --tasks <TASK_ARN> \
+  --query 'tasks[0].{LastStatus:lastStatus,Health:healthStatus,TaskDefinition:taskDefinitionArn,Attachments:attachments[].details}' \
+  --output json
+```
+
+确认 Task 只有私有 IP，`AssignPublicIp=DISABLED`，绑定的是 Go Task SG。Task SG 入站只应来自 Internal ALB SG 与 Lambda SG 的 8080。
+
+## 7. 验证 ALB Target
+
+```bash
+aws elbv2 describe-target-health \
+  --region us-east-2 \
+  --target-group-arn <PRODUCTION_TARGET_GROUP_ARN> \
+  --query 'TargetHealthDescriptions[].{Target:Target,State:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}' \
+  --output table
+```
+
+预期 target 是私有 IP 的 `8080`，状态 `healthy`。若 unhealthy：
+
+1. 确认容器监听 `0.0.0.0:8080`，不是 localhost。
+2. 确认 health path 是 `/healthz`，它不依赖 DB。
+3. 确认 ALB SG → Task SG 的 8080。
+4. 查看应用日志是否真正收到 health 请求。
+
+## 8. 验证 Cloud Map
+
+```bash
+aws servicediscovery list-instances \
+  --region us-east-2 \
+  --service-id <CLOUD_MAP_SERVICE_ID> \
+  --query 'Instances[].{Id:Id,IPv4:Attributes.AWS_INSTANCE_IPV4,Port:Attributes.AWS_INSTANCE_PORT,Health:Attributes.AWS_INIT_HEALTH_STATUS}' \
+  --output table
+```
+
+应只看到当前 production Task 的私有 IP 和 8080。Preview Task 不注册这个 service，避免 Lambda 随机命中 PR 环境。
+
+## 9. 验证日志和 RDS TLS
+
+在 CloudWatch Logs 中找到 production stream。启动成功日志应表明服务监听 8080，随后持续记录 `/healthz` 200。应用在开始监听前会 ping database，所以成功启动也间接证明：
+
+- Execution Role 能读取 production Secret。
+- Task 到 RDS 的 SG 路径正确。
+- RDS CA bundle 存在。
+- TLS certificate 与真实 RDS hostname 校验成功。
+
+日志中不得出现 DATABASE_URL、PAT、Secret value、请求 body 或完整内部堆栈响应。
+
+## 本阶段完成标准
+
+- [ ] ECR 存在不可变 SHA tag 与 digest。
+- [ ] production stack 完成。
+- [ ] ECS desired/running/pending 为 `1/1/0`，rollout completed。
+- [ ] Task 只有私有 IP且无 public IP。
+- [ ] ALB target healthy。
+- [ ] Cloud Map 只注册 production Task。
+- [ ] 启动日志证明 Secret、RDS 网络和 verify-full TLS 正常。

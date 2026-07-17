@@ -1,0 +1,188 @@
+---
+title: 5. VPC Link 与服务发现
+description: 接入公开 Go 路由，保留 Node tRPC，并让 Lambda 通过 Cloud Map 调用内部生成接口
+icon: Waypoints
+---
+
+## 本阶段目标
+
+建立两条不同的访问路径：
+
+```text
+公网读取：Browser → API Gateway → VPC Link → Internal ALB → Go
+内部生成：Node Lambda → Cloud Map private DNS → Go
+```
+
+公开路径经过 ALB，内部路径绕过 ALB 直接访问 Task。API Gateway 永远不创建 `/internal/*`。
+
+## 1. 为什么把隐式 HttpApi 改为显式
+
+最初 SAM 通过 Lambda event 隐式创建 HTTP API。加入 VPC Link 私有 integration 后，如果继续混用隐式和显式 route，路由所有权与 replacement 风险都不清晰。
+
+`apps/server/template.yaml` 因此显式声明 API、`$default` stage、Lambda integration、VPC Link 和 private HTTP integration，同时保留原 logical ID，目标是在原 API 上原地更新，不更换公网 URL。
+
+## 2. 审查最终 route 边界
+
+| Route | Integration |
+| --- | --- |
+| `GET /` | Node Lambda |
+| `ANY /trpc/{proxy+}` | Node Lambda |
+| `OPTIONS /trpc/{proxy+}` | Node Lambda |
+| `GET /api/v1/{proxy+}` | VPC Link → ALB |
+| `OPTIONS /api/v1/{proxy+}` | VPC Link → ALB |
+| `GET /healthz` | VPC Link → ALB |
+| `GET /readyz` | VPC Link → ALB |
+
+不应存在 `$default` catch-all route，也不应存在 `/internal`。显式 route 数量和 method 是安全边界的一部分。
+
+## 3. 本地验证 API 模板
+
+```bash
+pnpm --filter server build
+sam validate --template-file apps/server/template.yaml --lint
+pnpm check:infra
+```
+
+`pnpm check:infra` 会静态检查 route、integration、ALB mode 等关键边界。部署前还要查看 CloudFormation change set，特别确认 `AWS::ApiGatewayV2::Api` 没有 replacement。
+
+## 4. 创建待审更新
+
+生产数据库连接串仍通过既有安全注入方式提供，不要直接写在命令行。使用项目已有的 GitHub Actions Secret 部署链路，或在本机受保护环境中让 SAM 生成待审 change set。
+
+SAM 的推荐流程是：先 build，再 deploy 时保留 change set 确认，不使用 `--no-confirm-changeset`：
+
+```bash
+cd apps/server
+sam build
+sam deploy
+```
+
+在确认提示前，打开 CloudFormation Console 检查：
+
+- 现有 HTTP API 是 `Modify`，不是 replacement。
+- 新增 VPC Link、API access log group 和 5xx alarm。
+- Lambda function、permission 和 `$default` stage 是预期的原地更新。
+- 没有公开 `/internal/*`。
+
+如果 change set 显示 API replacement，立即取消，不要执行；API ID 变化会让 Cloudflare 中烧入的 URL失效。
+
+## 5. 等待 VPC Link
+
+部署后读取 stack output，获得 VPC Link ID：
+
+```bash
+aws apigatewayv2 get-vpc-link \
+  --region us-east-2 \
+  --vpc-link-id <VPC_LINK_ID> \
+  --query '{Status:VpcLinkStatus,Message:VpcLinkStatusMessage,Subnets:SubnetIds,SecurityGroups:SecurityGroupIds}' \
+  --output json
+```
+
+必须等到 `AVAILABLE`。若停在 `PENDING` 或 `FAILED`，检查两个私有子网、VPC Link SG 和账户网络配额。
+
+## 6. 逐条验证公网 route
+
+```bash
+export PUBLIC_API_BASE_URL=https://<API_ID>.execute-api.us-east-2.amazonaws.com
+
+curl --fail "$PUBLIC_API_BASE_URL/healthz"
+curl --fail "$PUBLIC_API_BASE_URL/readyz"
+curl --silent --show-error \
+  "$PUBLIC_API_BASE_URL/api/v1/github-users/does-not-exist/introduction"
+curl --silent --show-error "$PUBLIC_API_BASE_URL/"
+```
+
+预期：
+
+- health 和 ready 为 JSON 200。
+- 缺失用户是契约化 JSON 404，不是 API Gateway HTML/默认错误。
+- Node 根路径仍为 200。
+- tRPC 的已知只读 procedure 仍为 200。
+
+验证内部 route 没有暴露：
+
+```bash
+curl --include \
+  --request POST \
+  --header 'content-type: application/json' \
+  --data '{"githubUsername":"example","regenerate":false}' \
+  "$PUBLIC_API_BASE_URL/internal/v1/introductions"
+```
+
+预期是 API route 404，而不是 Go handler 的业务响应。
+
+## 7. 验证 CORS
+
+```bash
+curl --include \
+  --request OPTIONS \
+  --header 'Origin: https://<PRODUCTION_HOST>' \
+  --header 'Access-Control-Request-Method: GET' \
+  "$PUBLIC_API_BASE_URL/api/v1/github-users/example/introduction"
+```
+
+预期 204，并返回精确 Origin。再用不允许的 Origin 测试，响应不能给出允许凭证跨域的宽泛 `*`。
+
+CORS 是浏览器策略，不是 API 认证；攻击者仍可绕过浏览器直接请求 API Gateway。
+
+## 8. ALB 400 的定位方法
+
+本项目首次接入时，API Gateway 请求在到达 Target 前被 ALB 返回 400。关键证据是：
+
+- `HTTPCode_ELB_4XX_Count` 增加。
+- Target 4xx 没有数据。
+- Go access log 没有对应请求。
+
+这说明错误发生在 ALB，而不是 Go。根因是 ALB `routing.http.desync_mitigation_mode=strictest` 与 API Gateway private integration 的请求形态不兼容。最终将该属性固定为 `defensive`，并加入静态回归检查。
+
+不要看到浏览器报 CORS 就先改 CORS；上游 400/500 且缺少 CORS header 时，浏览器也会显示成 CORS 错误。
+
+## 9. 验证 Lambda → Cloud Map
+
+Lambda 环境变量：
+
+```text
+GO_API_INTERNAL_URL=http://go-api.github-account-info.local:8080
+```
+
+Node client 固定追加 `/internal/v1/introductions`，使用 8 秒请求超时，不携带 PAT 或 Authorization。tRPC mutation 将 Go 的 400/404/503 映射为语义化错误，未知错误不返回内部细节。
+
+通过管理页面对一个已经保存的账号生成介绍：
+
+1. 第一次应返回 `generated=true` 和 `generatorVersion`。
+2. 未修改来源数据再次调用，应返回 `generated=false`，说明命中 source hash cache。
+3. 公开 GET 应读到已经保存的结果。
+
+若 Lambda 返回 Go unavailable：
+
+1. 检查 VPC 的 `enableDnsSupport` 和 `enableDnsHostnames`。
+2. 从同 VPC 的受控诊断主机解析 `go-api.github-account-info.local`。
+3. 检查 Cloud Map 是否注册当前 Task IP。
+4. 检查 Lambda SG 出站和 Task SG 入站 8080。
+
+## 10. 验证 Task IP 替换
+
+```bash
+aws ecs update-service \
+  --region us-east-2 \
+  --cluster <ECS_CLUSTER_NAME> \
+  --service <ECS_SERVICE_NAME> \
+  --force-new-deployment
+
+aws ecs wait services-stable \
+  --region us-east-2 \
+  --cluster <ECS_CLUSTER_NAME> \
+  --services <ECS_SERVICE_NAME>
+```
+
+等待旧 Task 注销、新 Task healthy 后，确认 ALB 和 Cloud Map 都只保留新 IP。再次调用 generate，Lambda 不修改 URL也应成功。这才证明服务发现真正消除了固定 IP依赖。
+
+## 本阶段完成标准
+
+- [ ] 原 API ID 未替换。
+- [ ] VPC Link 为 `AVAILABLE`。
+- [ ] health、ready、公开 GET、OPTIONS 和 tRPC 均符合预期。
+- [ ] 公网 `/internal/*` 返回 route 404。
+- [ ] Go 日志能看到公开请求，ALB 不再产生异常 400。
+- [ ] Lambda 能通过 Cloud Map 生成并命中缓存。
+- [ ] Task IP 替换后内部调用仍成功。
