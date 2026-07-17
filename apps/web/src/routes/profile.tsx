@@ -1,13 +1,3 @@
-import { Button } from "@github-account-info/ui/components/button";
-import {
-	Card,
-	CardAction,
-	CardContent,
-	CardDescription,
-	CardFooter,
-	CardHeader,
-	CardTitle,
-} from "@github-account-info/ui/components/card";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
@@ -15,19 +5,12 @@ import {
 	AtSign,
 	BookOpen,
 	ExternalLink,
-	Eye,
-	FileText,
 	RefreshCw,
 	Save,
 	Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import {
-	introductionQueryKey,
-	PublicIntroductionApiError,
-	publicIntroductionQueryOptions,
-} from "@/utils/introduction-api";
 import { getSelectedToken } from "@/utils/token-store";
 import { trpc } from "@/utils/trpc";
 
@@ -61,7 +44,6 @@ function ProfilePage() {
 	const fetchMut = useMutation(trpc.github.getAccount.mutationOptions());
 	const createMut = useMutation(trpc.account.create.mutationOptions());
 	const updateMut = useMutation(trpc.account.update.mutationOptions());
-	const generateMut = useMutation(trpc.introduction.generate.mutationOptions());
 	const queryClient = useQueryClient();
 	const listQuery = useQuery(trpc.account.list.queryOptions());
 
@@ -72,11 +54,6 @@ function ProfilePage() {
 		listQuery.data?.find((r) => r.login === selectedToken?.login) ?? null;
 	const selectedTokenId = selectedToken?.id;
 	const selectedTokenValue = selectedToken?.token;
-	const introductionQuery = useQuery(
-		publicIntroductionQueryOptions(dbRecord?.login ?? "", {
-			enabled: Boolean(dbRecord?.login),
-		}),
-	);
 
 	// Load data: DB record takes priority; fall back to GitHub fetch
 	useEffect(() => {
@@ -195,31 +172,6 @@ function ProfilePage() {
 			await queryClient.invalidateQueries(trpc.account.list.queryFilter());
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "保存失败");
-		}
-	};
-
-	const handleGenerateIntroduction = async () => {
-		if (!dbRecord) {
-			toast.error("请先把账号信息保存到数据库");
-			return;
-		}
-
-		try {
-			const result = await generateMut.mutateAsync({
-				githubUsername: dbRecord.login,
-				regenerate: Boolean(introductionQuery.data),
-			});
-			queryClient.setQueryData(
-				introductionQueryKey(result.introduction.githubUsername),
-				result.introduction,
-			);
-			toast.success(
-				result.generated
-					? "个人介绍已生成并发布"
-					: "账号资料没有变化，现有个人介绍仍是最新版本",
-			);
-		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "生成个人介绍失败");
 		}
 	};
 
@@ -422,126 +374,12 @@ function ProfilePage() {
 						className="flex cursor-pointer items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 font-medium text-sm text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
 					>
 						<Save className="h-4 w-4" />
-						{isPending ? "保存中…" : "保存到数据库"}
+						{isPending ? "保存中…" : "保存"}
 					</button>
 				</div>
 			</div>
-
-			<Card>
-				<CardHeader>
-					<CardTitle>公开个人介绍</CardTitle>
-					<CardDescription>
-						Go 服务会使用已经保存的 GitHub username 和账号资料生成介绍，不会接收
-						GitHub Token。
-					</CardDescription>
-					{introductionQuery.data ? (
-						<CardAction>
-							<Button
-								variant="outline"
-								size="sm"
-								render={
-									<Link
-										to="/u/$username"
-										params={{
-											username: introductionQuery.data.githubUsername,
-										}}
-									/>
-								}
-							>
-								<Eye data-icon="inline-start" />
-								查看公开页面
-							</Button>
-						</CardAction>
-					) : null}
-				</CardHeader>
-				<CardContent>
-					<IntroductionStatus
-						hasStoredAccount={Boolean(dbRecord)}
-						isGenerating={generateMut.isPending}
-						isLoading={introductionQuery.isPending && Boolean(dbRecord)}
-						introduction={introductionQuery.data?.introduction}
-						error={introductionQuery.error}
-					/>
-				</CardContent>
-				<CardFooter className="justify-end">
-					<Button
-						onClick={handleGenerateIntroduction}
-						disabled={!dbRecord || generateMut.isPending}
-					>
-						{introductionQuery.data ? (
-							<RefreshCw
-								data-icon="inline-start"
-								className={generateMut.isPending ? "animate-spin" : undefined}
-							/>
-						) : (
-							<FileText data-icon="inline-start" />
-						)}
-						{generateMut.isPending
-							? "生成中…"
-							: introductionQuery.data
-								? "重新生成个人介绍"
-								: "生成个人介绍"}
-					</Button>
-				</CardFooter>
-			</Card>
 		</div>
 	);
-}
-
-function IntroductionStatus({
-	hasStoredAccount,
-	isGenerating,
-	isLoading,
-	introduction,
-	error,
-}: {
-	hasStoredAccount: boolean;
-	isGenerating: boolean;
-	isLoading: boolean;
-	introduction: string | undefined;
-	error: Error | null;
-}) {
-	if (!hasStoredAccount) {
-		return (
-			<p className="text-muted-foreground">
-				请先保存账号资料，再生成个人介绍。
-			</p>
-		);
-	}
-	if (isGenerating) {
-		return (
-			<p className="text-muted-foreground">
-				正在根据已保存的账号资料生成个人介绍…
-			</p>
-		);
-	}
-	if (isLoading) {
-		return (
-			<p className="text-muted-foreground">正在检查是否已经生成个人介绍…</p>
-		);
-	}
-	if (introduction) {
-		return (
-			<p className="line-clamp-3 whitespace-pre-wrap text-sm/relaxed">
-				{introduction}
-			</p>
-		);
-	}
-	if (
-		error instanceof PublicIntroductionApiError &&
-		error.status === 404 &&
-		error.code === "introduction_not_found"
-	) {
-		return <p className="text-muted-foreground">尚未生成个人介绍。</p>;
-	}
-	if (error) {
-		return (
-			<p className="text-muted-foreground">
-				暂时无法读取生成状态，但仍可尝试生成。
-			</p>
-		);
-	}
-	return <p className="text-muted-foreground">尚未生成个人介绍。</p>;
 }
 
 function Field({

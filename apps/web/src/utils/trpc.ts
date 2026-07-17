@@ -16,7 +16,7 @@ export const queryClient = new QueryClient({
 			if (query.meta?.suppressGlobalErrorToast === true) return;
 			toast.error(error.message, {
 				action: {
-					label: "retry",
+					label: "重试",
 					onClick: () => {
 						query.invalidate();
 					},

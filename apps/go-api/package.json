@@ -1,11 +1,12 @@
 {
-  "name": "go-api",
-  "version": "0.0.0",
-  "private": true,
-  "scripts": {
-    "build": "go build -o dist/go-api ./cmd/api",
-    "check-types": "go vet ./...",
-    "dev": "go run ./cmd/api",
-    "test": "go test ./..."
-  }
+	"name": "go-api",
+	"version": "0.0.0",
+	"private": true,
+	"scripts": {
+		"build": "go build -o dist/go-api ./cmd/api",
+		"check-types": "go vet ./...",
+		"dev": "node scripts/dev.mjs",
+		"dev:go": "go run ./cmd/api",
+		"test": "go test ./..."
+	}
 }

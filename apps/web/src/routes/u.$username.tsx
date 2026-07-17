@@ -25,6 +25,9 @@ import {
 	publicIntroductionQueryOptions,
 } from "@/utils/introduction-api";
 
+const INTRODUCTION_CARD_CLASS =
+	"rounded-xl border border-gray-200 bg-white shadow-sm ring-0";
+
 export const Route = createFileRoute("/u/$username")({
 	component: PublicIntroductionPage,
 	head: ({ params }) => ({
@@ -62,13 +65,16 @@ function PublicIntroductionPage() {
 
 	return (
 		<div className="flex flex-col gap-4">
-			<Button variant="ghost" render={<Link to="/" />} className="self-start">
-				<ArrowLeft data-icon="inline-start" />
-				返回首页
-			</Button>
+			<Link
+				to="/"
+				className="flex cursor-pointer items-center gap-1.5 self-start text-gray-500 text-sm transition hover:text-gray-900"
+			>
+				<ArrowLeft className="size-4" />
+				返回
+			</Link>
 
-			<Card>
-				<CardHeader>
+			<Card className={INTRODUCTION_CARD_CLASS}>
+				<CardHeader className="px-6">
 					<div className="flex min-w-0 items-center gap-3">
 						{profile.avatarUrl ? (
 							<img
@@ -77,13 +83,15 @@ function PublicIntroductionPage() {
 								className="size-14 rounded-full object-cover"
 							/>
 						) : (
-							<div className="flex size-14 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+							<div className="flex size-14 shrink-0 items-center justify-center rounded-full bg-blue-50 font-medium text-blue-500">
 								{profile.githubUsername.slice(0, 1).toUpperCase()}
 							</div>
 						)}
 						<div className="min-w-0">
-							<CardTitle>{displayName}</CardTitle>
-							<CardDescription>@{profile.githubUsername}</CardDescription>
+							<CardTitle className="text-gray-900">{displayName}</CardTitle>
+							<CardDescription className="text-gray-400">
+								@{profile.githubUsername}
+							</CardDescription>
 						</div>
 					</div>
 					<CardAction>
@@ -97,6 +105,7 @@ function PublicIntroductionPage() {
 									rel="noreferrer"
 								/>
 							}
+							className="rounded-lg border-gray-200 text-gray-700 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600"
 						>
 							GitHub
 							<ExternalLink data-icon="inline-end" />
@@ -104,15 +113,18 @@ function PublicIntroductionPage() {
 					</CardAction>
 				</CardHeader>
 
-				<CardContent className="flex flex-col gap-5">
+				<CardContent className="flex flex-col gap-5 px-6">
 					<section
 						aria-labelledby="introduction-heading"
 						className="flex flex-col gap-2"
 					>
-						<h1 id="introduction-heading" className="font-medium text-base">
+						<h1
+							id="introduction-heading"
+							className="font-semibold text-base text-gray-900"
+						>
 							个人介绍
 						</h1>
-						<p className="whitespace-pre-wrap text-sm/relaxed">
+						<p className="whitespace-pre-wrap text-gray-700 text-sm/relaxed">
 							{profile.introduction}
 						</p>
 					</section>
@@ -122,20 +134,21 @@ function PublicIntroductionPage() {
 							aria-labelledby="bio-heading"
 							className="flex flex-col gap-2"
 						>
-							<h2 id="bio-heading" className="font-medium text-sm">
+							<h2
+								id="bio-heading"
+								className="font-medium text-gray-700 text-sm"
+							>
 								GitHub Bio
 							</h2>
-							<p className="text-muted-foreground text-sm/relaxed">
-								{profile.bio}
-							</p>
+							<p className="text-gray-400 text-sm/relaxed">{profile.bio}</p>
 						</section>
 					) : null}
 
-					<div className="flex flex-wrap gap-x-5 gap-y-2 text-muted-foreground">
+					<div className="flex flex-wrap gap-x-5 gap-y-2 text-gray-500">
 						{profile.company ? <span>{profile.company}</span> : null}
 						{profile.location ? (
 							<span className="inline-flex items-center gap-1">
-								<MapPin aria-hidden="true" />
+								<MapPin aria-hidden="true" className="size-4 text-gray-400" />
 								{profile.location}
 							</span>
 						) : null}
@@ -144,35 +157,40 @@ function PublicIntroductionPage() {
 								href={blogUrl}
 								target="_blank"
 								rel="noreferrer"
-								className="inline-flex items-center gap-1 underline underline-offset-4"
+								className="inline-flex items-center gap-1 text-blue-600 underline underline-offset-4 hover:text-blue-700"
 							>
 								个人网站
-								<ExternalLink aria-hidden="true" />
+								<ExternalLink aria-hidden="true" className="size-4" />
 							</a>
 						) : null}
 					</div>
 
-					<dl className="grid grid-cols-3 gap-3 text-center">
+					<dl className="grid grid-cols-3 divide-x divide-gray-100 rounded-lg border border-gray-100 bg-gray-50 text-center text-xs">
 						<Stat
-							icon={<BookOpen aria-hidden="true" />}
+							icon={
+								<BookOpen aria-hidden="true" className="size-4 text-blue-400" />
+							}
 							label="公开仓库"
 							value={profile.publicRepos}
 						/>
 						<Stat
-							icon={<Users aria-hidden="true" />}
+							icon={
+								<Users aria-hidden="true" className="size-4 text-blue-400" />
+							}
 							label="关注者"
 							value={profile.followers}
 						/>
 						<Stat
-							icon={<Users aria-hidden="true" />}
+							icon={
+								<Users aria-hidden="true" className="size-4 text-blue-400" />
+							}
 							label="正在关注"
 							value={profile.following}
 						/>
 					</dl>
 				</CardContent>
 
-				<CardFooter className="justify-between gap-3 text-muted-foreground">
-					<span>生成器：{profile.generatorVersion}</span>
+				<CardFooter className="justify-end border-gray-200 px-6 text-gray-400">
 					<time dateTime={profile.generatedAt}>
 						生成于 {formatDate(profile.generatedAt)}
 					</time>
@@ -184,7 +202,7 @@ function PublicIntroductionPage() {
 
 function IntroductionSkeleton() {
 	return (
-		<Card aria-label="正在加载个人介绍">
+		<Card aria-label="正在加载个人介绍" className={INTRODUCTION_CARD_CLASS}>
 			<CardHeader>
 				<div className="flex items-center gap-3">
 					<Skeleton className="size-14 rounded-full" />
@@ -239,7 +257,7 @@ function IntroductionError({
 				: "Go 服务当前不可用或响应异常，请稍后重试。";
 
 	return (
-		<Card>
+		<Card className={INTRODUCTION_CARD_CLASS}>
 			<CardHeader>
 				<CardTitle>{title}</CardTitle>
 				<CardDescription>{description}</CardDescription>
@@ -278,10 +296,10 @@ function Stat({
 	value: number;
 }) {
 	return (
-		<div className="flex flex-col items-center gap-1 bg-muted p-3">
+		<div className="flex flex-col items-center gap-1 py-3">
 			{icon}
-			<dt>{label}</dt>
-			<dd className="font-medium text-foreground">{value}</dd>
+			<dd className="font-bold text-blue-600">{value}</dd>
+			<dt className="text-gray-400">{label}</dt>
 		</div>
 	);
 }

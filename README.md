@@ -6,8 +6,8 @@
 
 ## 功能特性
 
-- **Token 管理**：添加多个 GitHub PAT，以账号卡片形式展示（头像 + 用户名 + 统计数据），点击卡片切换账号
-- **账号信息编辑**：查看并编辑 GitHub 账号详情（姓名、简介、公司、地址、邮箱、博客、Twitter），保存到数据库
+- **Token 管理**：添加多个 GitHub PAT，以账号卡片形式展示（头像 + 用户名 + 统计数据），通过卡片按钮选择后续操作
+- **账号信息编辑**：查看并编辑 GitHub 账号详情（姓名、简介、公司、地址、邮箱、博客、Twitter），保存修改
 - **智能数据加载**：优先从数据库加载已保存的数据，无记录时自动从 GitHub 拉取，并标注数据来源
 - **手动刷新**：支持一键从 GitHub 拉取最新数据覆盖本地，再手动保存入库
 - **个人介绍生成**：Go 根据已经保存的 GitHub username 与账号资料生成稳定的中文介绍，第一版不调用 AI
@@ -89,11 +89,25 @@ pnpm db:push
 
 ### 4. 启动开发服务
 
-```bash
-# 同时启动前端和后端
-pnpm dev
+本项目的本地配置统一使用 SSM 隧道的 `127.0.0.1:5433`。保持两个终端运行即可：
 
-# 或分别启动
+```bash
+# 终端 1：保持数据库隧道运行
+pnpm db:tunnel
+
+# 终端 2：自动加载各应用的 .env.local，并同时启动三个应用
+pnpm dev
+```
+
+启动后可访问：
+
+- Web：`http://localhost:3001`
+- Node API：`http://localhost:3000`
+- Go API：`http://localhost:8080`
+
+如只需调试单个应用，也可以分别启动：
+
+```bash
 pnpm dev:web     # 前端 http://localhost:3001
 pnpm dev:server  # 后端 http://localhost:3000
 pnpm dev:go      # Go API http://localhost:8080
@@ -101,11 +115,11 @@ pnpm dev:go      # Go API http://localhost:8080
 
 ## 使用说明
 
-1. 打开 `http://localhost:5173`，进入 **Token 管理** 页
+1. 打开 `http://localhost:3001`，进入 **Token 管理** 页
 2. 填写名称和 GitHub PAT（需要 `read:user` 权限），点击「添加 Token」
-3. 验证成功后出现账号卡片，点击卡片进入 **账号信息** 页
-4. 查看/编辑账号信息，点击「保存到数据库」持久化
-5. 点击「生成个人介绍」，由 Node 调用 Go 内部接口生成并保存结果
+3. 验证成功后出现账号卡片，点击「查看并编辑」进入 **账号信息** 页
+4. 查看/编辑账号信息，点击「保存」持久化修改
+5. 点击卡片上的「生成个人介绍」，由 Node 调用 Go 内部接口生成并展示结果
 6. 通过 `/u/<GitHub username>` 查看无需登录的公开个人主页
 
 ## 常用命令
@@ -113,6 +127,7 @@ pnpm dev:go      # Go API http://localhost:8080
 | 命令 | 说明 |
 | --- | --- |
 | `pnpm dev` | 启动所有服务（开发模式） |
+| `pnpm dev:docs` | 单独启动文档站 |
 | `pnpm dev:go` | 启动 Go REST API |
 | `pnpm build` | 构建所有应用 |
 | `pnpm check` | Biome 格式化 + lint 并自动修复 |

@@ -1,8 +1,19 @@
+import type { AppRouter } from "@github-account-info/api/routers/index";
+import { Button } from "@github-account-info/ui/components/button";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
-import { BookOpen, Trash2, Users } from "lucide-react";
+import type { inferRouterOutputs } from "@trpc/server";
+import {
+	BookOpen,
+	LoaderCircle,
+	Pencil,
+	Sparkles,
+	Trash2,
+	Users,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { introductionQueryKey } from "@/utils/introduction-api";
 import { previewEnvironment } from "@/utils/preview-request";
 import {
 	addToken,
@@ -45,12 +56,36 @@ type MergedCard = {
 	dbId: number | undefined;
 };
 
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+type GithubAccount = RouterOutputs["github"]["getAccount"];
+
+function toAccountPayload(account: GithubAccount) {
+	return {
+		login: account.login,
+		githubId: account.githubId,
+		name: account.name,
+		avatarUrl: account.avatarUrl,
+		bio: account.bio,
+		company: account.company,
+		location: account.location,
+		email: account.email,
+		blog: account.blog,
+		twitterUsername: account.twitterUsername,
+		publicRepos: account.publicRepos,
+		followers: account.followers,
+		following: account.following,
+	};
+}
+
 function TokenPage() {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const [name, setName] = useState("");
 	const [token, setToken] = useState("");
 	const [tokens, setTokens] = useState<SavedToken[]>([]);
+	const [generatingCardKey, setGeneratingCardKey] = useState<string | null>(
+		null,
+	);
 
 	useEffect(() => {
 		setTokens(getTokens());
@@ -58,6 +93,9 @@ function TokenPage() {
 
 	const listQuery = useQuery(trpc.account.list.queryOptions());
 	const fetchMut = useMutation(trpc.github.getAccount.mutationOptions());
+	const syncAccountMut = useMutation(trpc.github.getAccount.mutationOptions());
+	const upsertMut = useMutation(trpc.account.upsert.mutationOptions());
+	const generateMut = useMutation(trpc.introduction.generate.mutationOptions());
 	const deleteMut = useMutation(trpc.account.delete.mutationOptions());
 
 	// 合并 DB 记录与本地 localStorage token
@@ -98,7 +136,6 @@ function TokenPage() {
 		}));
 
 	const allCards = [...dbCards, ...localOnlyCards];
-	const hasEditableCards = allCards.some((c) => c.hasLocalToken);
 
 	const handleAdd = async () => {
 		const trimmedName = name.trim();
@@ -168,6 +205,64 @@ function TokenPage() {
 		}
 	};
 
+	const handleGenerateIntroduction = async (
+		e: React.MouseEvent,
+		card: MergedCard,
+	) => {
+		e.stopPropagation();
+		if (generatingCardKey !== null) return;
+
+		setGeneratingCardKey(card.key);
+		try {
+			let githubUsername = card.login;
+
+			// 新增 Token 先只存在 localStorage。生成前补齐数据库记录，确保
+			// 当前卡片以及后续新增的每张卡片都能直接使用同一个入口。
+			if (card.dbId === undefined) {
+				const savedToken = card.localTokenId
+					? getTokens().find((item) => item.id === card.localTokenId)
+					: undefined;
+				if (!savedToken) {
+					throw new Error("找不到该账号对应的 GitHub Token，请重新添加");
+				}
+
+				const account = await syncAccountMut.mutateAsync({
+					token: savedToken.token,
+				});
+				await upsertMut.mutateAsync(toAccountPayload(account));
+				githubUsername = account.login;
+				addToken({
+					...savedToken,
+					login: account.login,
+					displayName: account.name,
+					avatarUrl: account.avatarUrl,
+					publicRepos: account.publicRepos,
+					followers: account.followers,
+					following: account.following,
+				});
+				setTokens(getTokens());
+				await queryClient.invalidateQueries(trpc.account.list.queryFilter());
+			}
+
+			const result = await generateMut.mutateAsync({
+				githubUsername,
+				regenerate: true,
+			});
+			queryClient.setQueryData(
+				introductionQueryKey(result.introduction.githubUsername),
+				result.introduction,
+			);
+			await navigate({
+				to: "/u/$username",
+				params: { username: result.introduction.githubUsername },
+			});
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "生成个人介绍失败");
+		} finally {
+			setGeneratingCardKey(null);
+		}
+	};
+
 	return (
 		<div className="grid gap-6">
 			<h2 className="font-semibold text-gray-900 text-xl">Token 管理</h2>
@@ -177,8 +272,11 @@ function TokenPage() {
 				<h3 className="mb-4 font-medium text-gray-800">添加 Token</h3>
 				<div className="grid gap-3">
 					<div className="flex flex-col gap-1.5">
-						<label className="text-gray-600 text-sm">名称</label>
+						<label htmlFor="token-name" className="text-gray-600 text-sm">
+							名称
+						</label>
 						<input
+							id="token-name"
 							type="text"
 							placeholder="我的 GitHub Token"
 							value={name}
@@ -187,8 +285,11 @@ function TokenPage() {
 						/>
 					</div>
 					<div className="flex flex-col gap-1.5">
-						<label className="text-gray-600 text-sm">Token</label>
+						<label htmlFor="github-token" className="text-gray-600 text-sm">
+							Token
+						</label>
 						<input
+							id="github-token"
 							type="password"
 							autoComplete="off"
 							placeholder="ghp_..."
@@ -214,21 +315,11 @@ function TokenPage() {
 			{/* Account cards */}
 			{allCards.length > 0 && (
 				<div className="grid gap-3">
-					{hasEditableCards && (
-						<p className="text-gray-400 text-xs">
-							点击卡片可查看并编辑账号信息
-						</p>
-					)}
 					<div className="grid gap-3 sm:grid-cols-2">
 						{allCards.map((card) => (
 							<div
 								key={card.key}
-								onClick={() => handleCardClick(card)}
-								className={`group relative rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition ${
-									card.hasLocalToken
-										? "cursor-pointer hover:border-blue-300 hover:shadow-md"
-										: "cursor-default opacity-80"
-								}`}
+								className="group relative rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition hover:border-blue-200 hover:shadow-md"
 							>
 								{/* Delete button — 仅本地有 token 时显示 */}
 								{card.hasLocalToken && (
@@ -285,6 +376,45 @@ function TokenPage() {
 										</span>
 										<span className="text-gray-400">正在关注</span>
 									</div>
+								</div>
+
+								<div
+									className={`mt-3 grid gap-2 ${card.hasLocalToken ? "grid-cols-2" : ""}`}
+								>
+									{card.hasLocalToken && (
+										<Button
+											type="button"
+											size="lg"
+											variant="outline"
+											onClick={() => handleCardClick(card)}
+											className="rounded-lg border-blue-200 bg-white text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+										>
+											<Pencil data-icon="inline-start" />
+											查看并编辑
+										</Button>
+									)}
+									<Button
+										type="button"
+										size="lg"
+										disabled={generatingCardKey !== null}
+										onClick={(e) => handleGenerateIntroduction(e, card)}
+										className="rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+									>
+										{generatingCardKey === card.key ? (
+											<>
+												<LoaderCircle
+													data-icon="inline-start"
+													className="animate-spin"
+												/>
+												正在生成…
+											</>
+										) : (
+											<>
+												<Sparkles data-icon="inline-start" />
+												生成个人介绍
+											</>
+										)}
+									</Button>
 								</div>
 
 								<p className="mt-3 text-gray-300 text-xs">

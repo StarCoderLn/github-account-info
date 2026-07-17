@@ -7,15 +7,15 @@ The Go service never receives a GitHub PAT and does not call GitHub to rediscove
 ## Development
 
 ```bash
-export DATABASE_URL='postgresql://...'
-export DB_SCHEMA='public'
-export CORS_ORIGINS='http://localhost:3001'
-export APP_ENV='development'
-pnpm dev:go
+# 仓库根目录的第一个终端
+pnpm db:tunnel
+
+# 仓库根目录的第二个终端，同时启动 Web、Node 与 Go
+pnpm dev
 curl http://localhost:8080/healthz
 ```
 
-The local `DATABASE_URL` should point to a local PostgreSQL instance or the existing SSM tunnel. Do not commit it and do not pass credentials as command-line arguments.
+`apps/go-api/.env.local` 会由 Go workspace 的开发命令自动加载。它的 `DATABASE_URL` 应指向本地 PostgreSQL，或指向仓库 `pnpm db:tunnel` 建立的 `127.0.0.1:5433` SSM 隧道。不要提交该文件，也不要把凭证作为命令行参数传入。
 
 Production containers default to `APP_ENV=production`. In production the service requires `RDS_CA_BUNDLE` and replaces any connection-string TLS preference with TLS 1.2+ certificate and hostname verification. The image contains the official AWS RDS `us-east-2` root bundle at `/etc/ssl/certs/rds-us-east-2-bundle.pem`.
 

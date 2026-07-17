@@ -7,7 +7,8 @@
 	],
 	"type": "module",
 	"scripts": {
-		"dev": "turbo run dev",
+		"dev": "turbo run dev --filter=web --filter=server --filter=go-api",
+		"dev:docs": "turbo run dev --filter=fumadocs",
 		"build": "turbo run build",
 		"check-types": "turbo run check-types",
 		"test": "turbo run test",
