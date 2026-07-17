@@ -408,7 +408,8 @@ Resources:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Effect: Allow
+          - Sid: PreviewCodeBuildProjects
+            Effect: Allow
             Principal:
               Service: codebuild.amazonaws.com
             Action: sts:AssumeRole
@@ -416,7 +417,19 @@ Resources:
               StringEquals:
                 aws:SourceAccount: !Ref AWS::AccountId
               ArnEquals:
-                aws:SourceArn: !Sub arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${ProjectName}-preview
+                aws:SourceArn:
+                  - !Sub arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${ProjectName}-preview
+                  - !Sub arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${ProjectName}-preview-ttl-cleanup
+          - Sid: ScheduledPreviewCleanupRule
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${ProjectName}-preview-ttl-cleanup
       Policies:
         - PolicyName: preview-build-logs-and-ecr-push
           PolicyDocument:
@@ -584,6 +597,22 @@ Resources:
                 Resource:
                   - Fn::ImportValue: !Sub ${ProjectName}-InternalHttpListenerArn
                   - !Sub arn:${AWS::Partition}:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:listener-rule/app/${ProjectName}-internal/*/*/*
+        - PolicyName: scheduled-preview-cleanup
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: DiscoverOnlyTaggedPreviewStacks
+                Effect: Allow
+                Action: tag:GetResources
+                Resource: "*"
+              - Sid: StartAndObservePreviewCleanupBuilds
+                Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource:
+                  - !Sub arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${ProjectName}-preview
+                  - !Sub arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${ProjectName}-preview-ttl-cleanup
       Tags:
         - Key: Project
           Value: !Ref ProjectName

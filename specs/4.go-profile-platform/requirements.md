@@ -94,14 +94,14 @@
 
 - [x] [AC-001] 本地 Go API 的 health、ready、generate、公开 introduction GET、400、404、503 路径均有自动化测试。
 - [x] [AC-002] 给定现有 GitHub username，Go 能通过内部映射查询 `github_account.login`、生成 introduction、持久化并在公开 GET 中返回。
-- [ ] [AC-003] `/u/$username` 在无 token、空 localStorage 的浏览器中可正常展示已生成的个人介绍。
+- [x] [AC-003] `/u/$username` 在无 token、空 localStorage 的浏览器中可正常展示已生成的个人介绍。
 - [x] [AC-004] Go 容器以非 root 用户运行，健康检查正常，镜像不包含 `.env`、生成供应商 secret 或源码凭证。
-- [ ] [AC-005] API Gateway 的 `/trpc/*` 仍进入 Lambda，`/api/v1/*` 经 VPC Link 进入 Internal ALB，`/internal/*` 不存在公网 route。
-- [ ] [AC-006] Internal ALB 无公网入口，浏览器不能绕过 API Gateway 直接访问。
-- [ ] [AC-007] Lambda 可通过 Cloud Map DNS 调用 Go generate endpoint，ECS task IP 变化后仍可重新发现。
-- [ ] [AC-008] CodeBuild 能从 commit 构建并部署 production Go 镜像，失败时不更新稳定服务。
-- [ ] [AC-009] 两个并行 PR 可以访问各自的前后端预览环境，数据库 schema 与生成结果相互隔离。
-- [ ] [AC-010] PR 合并或关闭后临时计算、路由和 schema 被删除，生产服务不受影响。
+- [x] [AC-005] API Gateway 的 `/trpc/*` 仍进入 Lambda，`/api/v1/*` 经 VPC Link 进入 Internal ALB，`/internal/*` 不存在公网 route。
+- [x] [AC-006] Internal ALB 无公网入口，浏览器不能绕过 API Gateway 直接访问。
+- [x] [AC-007] Lambda 可通过 Cloud Map DNS 调用 Go generate endpoint，ECS task IP 变化后仍可重新发现。
+- [x] [AC-008] CodeBuild 能从 commit 构建并部署 production Go 镜像，失败时不更新稳定服务。
+- [x] [AC-009] 两个并行 PR 可以访问各自的前后端预览环境，数据库 schema 与生成结果相互隔离。
+- [x] [AC-010] PR 合并或关闭后临时计算、路由和 schema 被删除，生产服务不受影响。
 - [x] [AC-011] 仓库文档与实际 RDS 架构一致，不再将生产数据库描述为 Neon。
 
 ## 当前决策

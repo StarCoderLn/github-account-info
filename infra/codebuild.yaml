@@ -23,6 +23,7 @@ Metadata:
         Parameters:
           - CodeBuildImage
           - ComputeType
+          - ScheduledPreviewCleanupExpression
 
 Parameters:
   ProjectName:
@@ -59,6 +60,15 @@ Parameters:
     AllowedValues:
       - BUILD_GENERAL1_SMALL
       - BUILD_GENERAL1_MEDIUM
+  ScheduledPreviewCleanupExpression:
+    Type: String
+    Default: cron(0 3 * * ? *)
+    MinLength: 8
+    MaxLength: 128
+    AllowedPattern: "^(rate|cron)\\([0-9A-Za-z*?,/ -]+\\)$"
+    Description: >-
+      EventBridge schedule for the tag-driven preview TTL fallback. The default
+      runs daily at 03:00 UTC; normal PR close cleanup remains event-driven.
 
 Resources:
   CodeBuildConnectionUsePolicy:
@@ -245,7 +255,8 @@ Resources:
               commands:
                 - set -euo pipefail
                 - '[[ "${CODEBUILD_SOURCE_VERSION:-}" =~ ^pr/([1-9][0-9]{0,4})$ ]] || { echo "source version must be pr/<1-49999>" >&2; exit 1; }'
-                - PR_NUMBER="${BASH_REMATCH[1]}"
+                - PR_NUMBER="${CODEBUILD_SOURCE_VERSION#pr/}"
+                - '[[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,4}$ ]] || { echo "invalid PR number" >&2; exit 1; }'
                 - '(( PR_NUMBER <= 49999 )) || { echo "PR number exceeds listener priority range" >&2; exit 1; }'
                 - STACK_NAME="${PROJECT_NAME}-pr-${PR_NUMBER}"
                 - SCHEMA_NAME="pr_${PR_NUMBER}"
@@ -265,7 +276,7 @@ Resources:
                   esac
                 - |
                   if [[ "$PREVIEW_ACTION" == "deploy" ]]; then
-                    COMMIT_SHA="$(git rev-parse HEAD^2 2>/dev/null || git rev-parse HEAD)"
+                    COMMIT_SHA="${CODEBUILD_RESOLVED_SOURCE_VERSION:-}"
                     COMMIT_SHA="$(printf '%s' "$COMMIT_SHA" | tr '[:upper:]' '[:lower:]')"
                     [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "head commit must be a full SHA" >&2; exit 1; }
                     PREVIEW_KEY="$(node packages/preview-environment/cli.mjs "$COMMIT_SHA")"
@@ -369,16 +380,10 @@ Resources:
                   if [[ "$PREVIEW_ACTION" == "deploy" ]]; then
                     [[ "${CODEBUILD_BUILD_SUCCEEDING:-0}" == "1" ]] || { echo "build failed; preview deployment blocked" >&2; exit 1; }
                     [[ -f "$CODEBUILD_SRC_DIR/.codebuild-preview-image-ready" ]] || { echo "verified preview image marker missing" >&2; exit 1; }
-                    if stack_exists; then
-                      deploy_stack true 1
-                      DATABASE_TASK_DEFINITION="$(aws cloudformation describe-stacks --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs[?OutputKey==`DatabaseTaskDefinitionArn`].OutputValue | [0]' --output text)"
-                      run_database_task create "$DATABASE_TASK_DEFINITION"
-                    else
-                      deploy_stack false 0
-                      DATABASE_TASK_DEFINITION="$(aws cloudformation describe-stacks --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs[?OutputKey==`DatabaseTaskDefinitionArn`].OutputValue | [0]' --output text)"
-                      run_database_task create "$DATABASE_TASK_DEFINITION"
-                      deploy_stack true 1
-                    fi
+                    deploy_stack false 0
+                    DATABASE_TASK_DEFINITION="$(aws cloudformation describe-stacks --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs[?OutputKey==`DatabaseTaskDefinitionArn`].OutputValue | [0]' --output text)"
+                    run_database_task create "$DATABASE_TASK_DEFINITION"
+                    deploy_stack true 1
                     aws ecs wait services-stable --region "$AWS_DEFAULT_REGION" --cluster "$ECS_CLUSTER_NAME" --services "${PROJECT_NAME}-pr-${PR_NUMBER}"
                     curl --fail --silent --show-error --max-time 15 -H "X-Preview-Environment: ${PREVIEW_KEY}" "${PUBLIC_API_BASE_URL}/healthz" >/dev/null
                     curl --fail --silent --show-error --max-time 15 -H "X-Preview-Environment: ${PREVIEW_KEY}" "${PUBLIC_API_BASE_URL}/api/v1/github-users/preview-user/introduction" >/dev/null
@@ -493,6 +498,173 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
+  PreviewTtlCleanupProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${ProjectName}-preview-ttl-cleanup
+      Description: >-
+        Trusted scheduled scanner that starts the already-tested PR cleanup
+        build only for expired Project/Environment-tagged preview stacks.
+      ServiceRole:
+        Fn::ImportValue: !Sub ${ProjectName}-PreviewCodeBuildRoleArn
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          env:
+            shell: bash
+          phases:
+            build:
+              commands:
+                - set -euo pipefail
+                - |
+                  NOW_EPOCH="$(date -u +%s)"
+                  mapfile -t STACK_ARNS < <(
+                    aws resourcegroupstaggingapi get-resources \
+                      --region "$AWS_DEFAULT_REGION" \
+                      --resource-type-filters cloudformation:stack \
+                      --tag-filters \
+                        "Key=Project,Values=${PROJECT_NAME}" \
+                        "Key=Environment,Values=preview" \
+                      --query 'ResourceTagMappingList[].ResourceARN' \
+                      --output text | tr '\t' '\n' | sed '/^$/d'
+                  )
+
+                  if (( ${#STACK_ARNS[@]} == 0 )); then
+                    echo "No tagged preview stacks were found"
+                    exit 0
+                  fi
+
+                  for STACK_ARN in "${STACK_ARNS[@]}"; do
+                    STACK_PATH="${STACK_ARN#*:stack/}"
+                    STACK_NAME="${STACK_PATH%%/*}"
+                    PREFIX="${PROJECT_NAME}-pr-"
+                    [[ "$STACK_NAME" == "$PREFIX"* ]] || {
+                      echo "Ignoring unexpected tagged stack ARN" >&2
+                      continue
+                    }
+                    PR_NUMBER="${STACK_NAME#"$PREFIX"}"
+                    [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,4}$ ]] || {
+                      echo "Ignoring preview stack with invalid PR number" >&2
+                      continue
+                    }
+                    (( PR_NUMBER <= 49999 )) || {
+                      echo "Ignoring preview stack outside listener priority range" >&2
+                      continue
+                    }
+
+                    EXPIRES_AT="$(aws cloudformation describe-stacks \
+                      --region "$AWS_DEFAULT_REGION" \
+                      --stack-name "$STACK_ARN" \
+                      --query 'Stacks[0].Tags[?Key==`ExpiresAt`].Value | [0]' \
+                      --output text)"
+                    [[ "$EXPIRES_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || {
+                      echo "Ignoring ${STACK_NAME}: missing or invalid ExpiresAt" >&2
+                      continue
+                    }
+                    EXPIRES_EPOCH="$(date -u -d "$EXPIRES_AT" +%s)"
+                    if (( EXPIRES_EPOCH > NOW_EPOCH )); then
+                      echo "${STACK_NAME} is not expired"
+                      continue
+                    fi
+
+                    echo "Starting guarded cleanup for expired ${STACK_NAME}"
+                    BUILD_ID="$(aws codebuild start-build \
+                      --region "$AWS_DEFAULT_REGION" \
+                      --project-name "${PROJECT_NAME}-preview" \
+                      --source-version "pr/${PR_NUMBER}" \
+                      --environment-variables-override \
+                        name=CODEBUILD_WEBHOOK_EVENT,value=PULL_REQUEST_CLOSED,type=PLAINTEXT \
+                      --query 'build.id' \
+                      --output text)"
+                    [[ "$BUILD_ID" == "${PROJECT_NAME}-preview:"* ]] || {
+                      echo "Cleanup build did not start for ${STACK_NAME}" >&2
+                      exit 1
+                    }
+
+                    CLEANUP_FINISHED=false
+                    for _ in $(seq 1 120); do
+                      BUILD_STATUS="$(aws codebuild batch-get-builds \
+                        --region "$AWS_DEFAULT_REGION" \
+                        --ids "$BUILD_ID" \
+                        --query 'builds[0].buildStatus' \
+                        --output text)"
+                      case "$BUILD_STATUS" in
+                        SUCCEEDED)
+                          CLEANUP_FINISHED=true
+                          break
+                          ;;
+                        FAILED|FAULT|STOPPED|TIMED_OUT)
+                          echo "Cleanup build ${BUILD_ID} ended with ${BUILD_STATUS}" >&2
+                          exit 1
+                          ;;
+                        IN_PROGRESS)
+                          sleep 15
+                          ;;
+                        *)
+                          echo "Unexpected cleanup build status: ${BUILD_STATUS}" >&2
+                          exit 1
+                          ;;
+                      esac
+                    done
+                    [[ "$CLEANUP_FINISHED" == true ]] || {
+                      echo "Timed out waiting for cleanup build ${BUILD_ID}" >&2
+                      exit 1
+                    }
+                    echo "Expired preview ${STACK_NAME} was removed"
+                  done
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: !Ref CodeBuildImage
+        ComputeType: BUILD_GENERAL1_SMALL
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - Name: PROJECT_NAME
+            Type: PLAINTEXT
+            Value: !Ref ProjectName
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref PreviewBuildLogGroup
+          StreamName: ttl-cleanup
+        S3Logs:
+          Status: DISABLED
+      TimeoutInMinutes: 35
+      QueuedTimeoutInMinutes: 10
+      ConcurrentBuildLimit: 1
+      BadgeEnabled: false
+      Visibility: PRIVATE
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: preview-cleanup
+        - Key: ManagedBy
+          Value: cloudformation
+
+  PreviewTtlCleanupSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ${ProjectName}-preview-ttl-cleanup
+      Description: Starts the trusted tag-driven preview TTL scanner.
+      ScheduleExpression: !Ref ScheduledPreviewCleanupExpression
+      State: ENABLED
+      Targets:
+        - Id: PreviewTtlCleanupCodeBuild
+          Arn: !GetAtt PreviewTtlCleanupProject.Arn
+          RoleArn:
+            Fn::ImportValue: !Sub ${ProjectName}-PreviewCodeBuildRoleArn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: preview-cleanup
+        - Key: ManagedBy
+          Value: cloudformation
+
 Outputs:
   ProductionBuildProjectName:
     Value: !Ref ProductionBuildProject
@@ -506,3 +678,7 @@ Outputs:
     Value: !GetAtt PreviewBuildProject.Arn
   PreviewBuildLogGroupName:
     Value: !Ref PreviewBuildLogGroup
+  PreviewTtlCleanupProjectName:
+    Value: !Ref PreviewTtlCleanupProject
+  PreviewTtlCleanupScheduleArn:
+    Value: !GetAtt PreviewTtlCleanupSchedule.Arn

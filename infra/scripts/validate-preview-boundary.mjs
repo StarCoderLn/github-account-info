@@ -40,9 +40,21 @@ assertExcludes(productionBuildRole, literal("stack/{ProjectName}-pr-"));
 
 const previewBuildRole = resourceBlock(iam, "PreviewCodeBuildRole");
 assertIncludes(previewBuildRole, literal("project/{ProjectName}-preview"));
+assertIncludes(
+	previewBuildRole,
+	literal("project/{ProjectName}-preview-ttl-cleanup"),
+);
 assertIncludes(previewBuildRole, literal("stack/{ProjectName}-pr-*/*"));
 assertIncludes(previewBuildRole, "cloudformation:GetTemplateSummary");
 assertIncludes(previewBuildRole, "PassOnlyPreviewExecutionRole");
+assertIncludes(previewBuildRole, "Service: events.amazonaws.com");
+assertIncludes(
+	previewBuildRole,
+	literal("rule/{ProjectName}-preview-ttl-cleanup"),
+);
+assertIncludes(previewBuildRole, "tag:GetResources");
+assertIncludes(previewBuildRole, "codebuild:StartBuild");
+assertIncludes(previewBuildRole, "codebuild:BatchGetBuilds");
 assertExcludes(previewBuildRole, "Resource: !GetAtt EcsTaskExecutionRole.Arn");
 assertExcludes(previewBuildRole, "ecs:DeregisterTaskDefinition");
 assertExcludes(previewBuildRole, "ecs:StopTask");
@@ -61,6 +73,9 @@ assertIncludes(preview, literal("{ProjectName}-PreviewDatabaseUrlSecretArn"));
 assertExcludes(preview, literal("{ProjectName}-DatabaseUrlSecretArn"));
 assertExcludes(preview, "ServiceRegistries:");
 assertExcludes(preview, "CloudMap");
+assertExcludes(preview, "&PreviewTags");
+assertExcludes(preview, "*PreviewTags");
+assertOccurrenceCount(preview, "      Tags:\n", 4);
 
 const previewProject = resourceBlock(codebuild, "PreviewBuildProject");
 assertIncludes(previewProject, "BuildSpec: |");
@@ -74,12 +89,51 @@ assertIncludes(previewProject, "PULL_REQUEST_MERGED,PULL_REQUEST_CLOSED");
 assertIncludes(previewProject, "Pattern: ^refs/heads/master$");
 assertIncludes(previewProject, "CODEBUILD_BUILD_SUCCEEDING");
 assertIncludes(previewProject, ".codebuild-preview-image-ready");
+assertIncludes(
+	previewProject,
+	`COMMIT_SHA="\${CODEBUILD_RESOLVED_SOURCE_VERSION:-}"`,
+);
+assertExcludes(previewProject, "git rev-parse HEAD^2");
+assertIncludes(previewProject, `PR_NUMBER="\${CODEBUILD_SOURCE_VERSION#pr/}"`);
+assertIncludes(previewProject, '[[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,4}$ ]]');
+assertExcludes(previewProject, `PR_NUMBER="\${BASH_REMATCH[1]}"`);
 assertIncludes(previewProject, '$1 == "ARG" && $2 ~ /^GO_IMAGE=/');
+assertOrdered(previewProject, [
+	'if [[ "$PREVIEW_ACTION" == "deploy" ]]',
+	"deploy_stack false 0",
+	'run_database_task create "$DATABASE_TASK_DEFINITION"',
+	"deploy_stack true 1",
+	"aws ecs wait services-stable",
+]);
 assertOrdered(previewProject, [
 	"deploy_stack false 0",
 	"run_database_task drop",
 	"aws cloudformation delete-stack",
 ]);
+
+const ttlCleanupProject = resourceBlock(codebuild, "PreviewTtlCleanupProject");
+assertIncludes(ttlCleanupProject, "Type: NO_SOURCE");
+assertIncludes(ttlCleanupProject, "aws resourcegroupstaggingapi get-resources");
+assertIncludes(ttlCleanupProject, '"Key=Project,Values=${PROJECT_NAME}"');
+assertIncludes(ttlCleanupProject, '"Key=Environment,Values=preview"');
+assertIncludes(ttlCleanupProject, "cloudformation:stack");
+assertIncludes(ttlCleanupProject, "ExpiresAt");
+assertIncludes(ttlCleanupProject, '"${PROJECT_NAME}-preview"');
+assertIncludes(ttlCleanupProject, 'name=CODEBUILD_WEBHOOK_EVENT,value=PULL_REQUEST_CLOSED,type=PLAINTEXT');
+assertIncludes(ttlCleanupProject, '[[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,4}$ ]]');
+assertIncludes(ttlCleanupProject, "(( PR_NUMBER <= 49999 ))");
+assertIncludes(ttlCleanupProject, "CLEANUP_FINISHED=false");
+assertIncludes(ttlCleanupProject, "ConcurrentBuildLimit: 1");
+assertExcludes(ttlCleanupProject, "PrivilegedMode: true");
+
+const ttlCleanupSchedule = resourceBlock(codebuild, "PreviewTtlCleanupSchedule");
+assertIncludes(ttlCleanupSchedule, "Type: AWS::Events::Rule");
+assertIncludes(ttlCleanupSchedule, "State: ENABLED");
+assertIncludes(ttlCleanupSchedule, "PreviewTtlCleanupProject.Arn");
+assertIncludes(
+	ttlCleanupSchedule,
+	literal("{ProjectName}-PreviewCodeBuildRoleArn"),
+);
 
 assertExcludes(previewDatabase, `"public"."github_account"`);
 assertIncludes(previewDatabase, "ErrUnsafeConfirmation");
@@ -92,7 +146,7 @@ if (!goBuilderImage?.includes("@sha256:")) {
 }
 
 console.log(
-	"Preview boundary valid: four isolated roles, approved PR webhook, pr-only stacks, separate secret, header routing, guarded schema cleanup",
+	"Preview boundary valid: four isolated roles, approved PR webhook, pr-only stacks, separate secret, header routing, guarded schema cleanup, scheduled TTL fallback",
 );
 
 function read(relativePath) {

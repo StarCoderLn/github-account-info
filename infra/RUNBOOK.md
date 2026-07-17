@@ -99,7 +99,9 @@ aws cloudformation describe-stacks \
   --output json
 ```
 
-preview Task Definition 使用 `Retain`，因为 `ecs:DeregisterTaskDefinition` 不能按资源 ARN安全收紧。它们不运行、不产生 Fargate 费用，但会占 task definition revision 配额。阶段 11 的定时兜底尚未启用前，每月按 `Project`、`Environment=preview` 和 `ExpiresAt` tag 做一次只读审计；实际注销必须通过后续可信清理流程，不能给 PR CodeBuild Role 增加通配的注销权限。
+EventBridge 默认每天 03:00 UTC 启动 `${ProjectName}-preview-ttl-cleanup`。scanner 为 `NO_SOURCE`、非 privileged CodeBuild，只读取同时带 `Project`、`Environment=preview` 标签的 CloudFormation Stack；严格验证 Stack 名称、PR number 与 `ExpiresAt` 后，通过既有 preview build 的 `PULL_REQUEST_CLOSED` 路径执行相同的安全清理。若 scanner 失败，在 `/aws/codebuild/${ProjectName}-preview` 的 `ttl-cleanup` stream 查看日志；不要绕过 schema confirmation 直接删除数据库对象。
+
+preview Task Definition 使用 `Retain`，因为 `ecs:DeregisterTaskDefinition` 不能按资源 ARN安全收紧。它们不运行、不产生 Fargate 费用，但会占 task definition revision 配额。每月仍应按 `Project`、`Environment=preview` 和 `ExpiresAt` tag 做一次只读审计；实际注销必须由可信管理员执行，不能给会执行 PR 源码的 Preview CodeBuild Role 增加通配注销权限。
 
 ## 日志与数据安全
 

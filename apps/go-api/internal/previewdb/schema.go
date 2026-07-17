@@ -43,10 +43,10 @@ func Create(ctx context.Context, db Beginner, prNumber int) error {
 			return fmt.Errorf("create preview schema objects: %w", err)
 		}
 	}
-	if _, err := tx.Exec(ctx, seedAccountStatement(schema), prNumber); err != nil {
+	if _, err := tx.Exec(ctx, seedAccountStatement(schema), int64(prNumber)); err != nil {
 		return fmt.Errorf("seed preview account: %w", err)
 	}
-	if _, err := tx.Exec(ctx, seedIntroductionStatement(schema), prNumber); err != nil {
+	if _, err := tx.Exec(ctx, seedIntroductionStatement(schema), previewIntroductionArgs(prNumber)...); err != nil {
 		return fmt.Errorf("seed preview introduction: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -131,7 +131,7 @@ func seedAccountStatement(schema string) string {
   login, github_id, name, avatar_url, bio, company, location,
   public_repos, followers, following, blog
 ) VALUES (
-  'preview-user', 9000000000000000 + $1, 'Preview Developer', NULL,
+  'preview-user', 9000000000000000::bigint + $1::bigint, 'Preview Developer', NULL,
   '这是 PR 独立环境中的虚构示例账号，不包含 production 数据。',
   'Preview Workspace', 'Isolated Schema', 3, 12, 4,
   'https://example.com/preview'
@@ -157,15 +157,23 @@ func seedIntroductionStatement(schema string) string {
 )
 SELECT
   id,
-  'Preview Developer（@preview-user）正在 PR #' || $1 || ' 的隔离环境中验证个人介绍页面。这里的数据完全由 preview seed 生成，不会读取 production 账号。',
+  $2::text,
   'preview-seed-v1',
   repeat('0', 64)
 FROM ` + account + `
-WHERE github_id = 9000000000000000 + $1
+WHERE github_id = 9000000000000000::bigint + $1::bigint
 ON CONFLICT (github_account_id) DO UPDATE SET
   content = EXCLUDED.content,
   generator_version = EXCLUDED.generator_version,
   source_hash = EXCLUDED.source_hash,
   generated_at = now(),
   updated_at = now()`
+}
+
+func previewIntroductionContent(prNumber int) string {
+	return fmt.Sprintf("Preview Developer（@preview-user）正在 PR #%d 的隔离环境中验证个人介绍页面。这里的数据完全由 preview seed 生成，不会读取 production 账号。", prNumber)
+}
+
+func previewIntroductionArgs(prNumber int) []any {
+	return []any{int64(prNumber), previewIntroductionContent(prNumber)}
 }

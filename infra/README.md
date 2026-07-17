@@ -362,7 +362,11 @@ preview CodeBuild webhook 只接受目标为 `master` 的 PR created/updated/reo
 4. 启用 header listener rule 和单副本 Fargate Spot Service。
 5. 携带 preview header 通过 API Gateway smoke test。
 
-PR merged/closed 时顺序相反：先移除 listener rule 与 Service，再运行带精确 `--confirm-schema pr_<number>` 的 drop task，最后删除 PR stack。镜像由 ECR 14 天 lifecycle 兜底清理。由于 ECS 的 `DeregisterTaskDefinition` 不能按 ARN 收紧，Preview Role 不拥有该破坏性权限；preview Task Definition 暂时 Retain（不产生运行费用），由阶段 11 的可信 tag 清理任务统一注销。
+PR merged/closed 时顺序相反：先移除 listener rule 与 Service，再运行带精确 `--confirm-schema pr_<number>` 的 drop task，最后删除 PR stack。镜像由 ECR 14 天 lifecycle 兜底清理。
+
+若 GitHub close webhook 遗漏，EventBridge 默认每天 03:00 UTC 启动 `${ProjectName}-preview-ttl-cleanup`。这个 CodeBuild project 使用 `NO_SOURCE`、非 privileged 环境，只扫描同时带 `Project=${ProjectName}`、`Environment=preview` 和有效 `ExpiresAt` 的 CloudFormation Stack；严格匹配 `${ProjectName}-pr-<1..49999>` 且确认过期后，才用 `PULL_REQUEST_CLOSED` 启动已经验收的 preview cleanup build，并等待其成功。EventBridge 复用现有 Preview CodeBuild Role，额外 trust 受 `SourceAccount` 和精确 Rule ARN 限制，因此不新增第五个角色，也不会扫描或删除 production Stack。
+
+由于 ECS 的 `DeregisterTaskDefinition` 不能按 ARN 收紧，Preview Role 不拥有该破坏性权限；preview Task Definition 暂时 Retain。它们不会运行、不会产生 Fargate 费用，但会占 revision 配额，仍由可信管理员按 RUNBOOK 周期审计后注销，不能给执行 PR 源码的 Role 增加通配注销权限。
 
 本地验证：
 

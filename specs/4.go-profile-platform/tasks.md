@@ -61,9 +61,9 @@
 - [x] T-304：新增 `/u/$username` 路由，以生成内容为核心展示个人介绍。
 - [x] T-305：实现尚未生成、生成中、loading、404、retry、service unavailable 状态。
 - [x] T-306：确认公开页面无 PAT/localStorage 依赖，email 默认不展示。
-- [ ] T-307：完成前端类型检查、构建与浏览器联调。
+- [x] T-307：完成前端类型检查、构建与浏览器联调。
 
-T-307 当前状态：类型检查及 `server`、`web`、`go-api` production build 已通过；本地 PostgreSQL + Go 容器的 generate/read API E2E 已通过。真实浏览器在无 token、空 localStorage 下的 `/u/$username` 联调尚未执行，因此本项保持未完成。
+T-307 验收记录（2026-07-17）：类型检查及 `server`、`web`、`go-api` production build 已通过；本地 PostgreSQL + Go 容器的 generate/read API E2E 已通过。Cloudflare Production 已从旧提交 `408357f` 更新到包含公开主页路由的 `f73475d`，部署 `9f5cf939...` 成功。真实 Chrome 无痕窗口在 localStorage 为空、无 token/登录状态下打开 `/u/StarCoderLn`，成功展示由 production Go API 返回的头像、账号资料、模板生成个人介绍和统计信息；因此浏览器联调与公开无认证读取边界均已验收。
 
 ## 阶段 4：容器化
 
@@ -136,19 +136,31 @@ T-307 当前状态：类型检查及 `server`、`web`、`go-api` production buil
 - [x] T-1003：创建 `pr_<number>` schema migration/seed job。
 - [x] T-1004：创建 PR ECS Service、Target Group 与 Header Listener Rule。
 - [x] T-1005：在 Cloudflare Preview build 注入 preview key，前端发送 header。
-- [ ] T-1006：验证两个并发 PR 的流量和 schema 隔离。
+- [x] T-1006：验证两个并发 PR 的流量和 schema 隔离。
 
-阶段 10 本地实现状态（2026-07-16）：Cloudflare/Vite 与 CodeBuild 使用完整 head commit SHA 生成同一 `preview-<12位sha>`；PR stack 使用 PR number 作为 1～49999 的唯一 listener priority，Fargate Spot 单副本连接独立 preview database 内的 `pr_<number>`。Preview CodeBuild buildspec 内联并启用 PR 审批，权限只能管理 `pr-*` stack，Preview Execution Role 只能读取 preview Secret。PR close/merge 的路由、Service、schema、stack 清理已实现。T-1006 必须部署后由用户创建两个真实 PR 并验证，因此保持未完成。
+阶段 10 实现状态（2026-07-17）：Cloudflare/Vite 与 CodeBuild 使用完整 head commit SHA 生成同一 `preview-<12位sha>`；PR stack 使用 PR number 作为 1～49999 的唯一 listener priority，Fargate Spot 单副本连接独立 preview database 内的 `pr_<number>`。Preview CodeBuild buildspec 内联并启用 PR 审批，权限只能管理 `pr-*` stack，Preview Execution Role 只能读取 preview Secret。PR close/merge 的路由、Service、schema、stack 清理已实现。真实 PR #1/#2 已创建并触发独立 preview build；首次运行在 PRE_BUILD 安全失败，原因是直接检出 PR head 时 `git rev-parse HEAD^2` 把失败的 revision 字面量与后备 SHA 一并写入，完整 SHA 校验正确阻止后续构建和部署。修复后改用 AWS 在 DOWNLOAD_SOURCE 后提供的 `CODEBUILD_RESOLVED_SOURCE_VERSION`，并补充静态回归检查。Change Set `stage10-preview-resolved-source-review` 已审核并执行，CodeBuild stack 为 `UPDATE_COMPLETE`；`PreviewBuildProject` 物理 ID 保持 `github-account-info-go-preview`，已部署 BuildSpec 包含新变量且不再包含旧 `HEAD^2` 逻辑。第二次运行已精确匹配两个 PR head SHA，但暴露 `BASH_REMATCH` 不能跨独立 BuildSpec command 可靠传递，导致 `PRNumber` 为空；CloudFormation 参数安全门阻止 Stack 创建，仅留下两个格式错误的 `pr--<sha>` ECR 标签。现已改为从已验证的 `CODEBUILD_SOURCE_VERSION` 剥离 `pr/` 前缀并再次校验数字范围。Change Set `stage10-preview-pr-number-review` 已审核并执行，CodeBuild stack 再次为 `UPDATE_COMPLETE`，Preview project 物理 ID 未变化；已部署 BuildSpec 确认包含前缀剥离与数字校验且不存在旧 `BASH_REMATCH` 赋值。T-1006 仍需再次重试两个 PR，取得并发流量与 schema 隔离证据。
+
+阶段 10 第三轮验证（2026-07-17）：PR #1/#2 构建分别精确匹配 `8d229fe...` 与 `6863f08...`，并成功生成格式正确的 `pr-1-<sha>` / `pr-2-<sha>` 不可变镜像，证明 head SHA 与 PR number 解析均已修复。两条构建随后在 CloudFormation `CreateChangeSet` 前被 `go-preview.yaml` 的 YAML anchor/alias 拒绝；没有创建 PR stack、ECS service 或 database schema。模板现已展开四份显式 Tags，验证器禁止 `&PreviewTags` / `*PreviewTags`，且 AWS `validate-template` 已通过。仍需把模板修复带入两个 PR head 后运行第四轮并发验收。
+
+阶段 10 第四轮验证（2026-07-17）：PR #1/#2 已使用无 YAML alias 的模板分别创建 `CREATE_COMPLETE` Stack，均停留在安全的 `RoutingEnabled=false`、`DesiredCount=0` 第一阶段，没有 ECS service 对外路由。两个 `preview-db create` Task 成功启动但应用退出 1，容器日志一致显示 seed SQL 把同一个 `$1` 同时用于 text 拼接和 bigint 加法，触发 PostgreSQL `bigint + text` 类型错误。SQL 现对文本和数值上下文分别使用 `$1::text` / `$1::bigint`，并增加单元测试；主 worktree 与两个 PR worktree 的 `previewdb` 测试均通过。另将所有 deploy/retry 统一为 `deploy_stack false 0 → create schema → deploy_stack true 1`，防止半成品 Stack 重试时先暴露路由。Change Set `stage10-preview-safe-retry-review` 已审核并执行，CodeBuild stack 为 `UPDATE_COMPLETE`、Preview project 物理 ID 未变化，且从已部署 BuildSpec 验证上述五个安全门顺序完整有序。仍需把 SQL 修复推入两个 PR 后运行第五轮。
+
+阶段 10 第五轮验证（2026-07-17）：两个 Stack 均先更新到第五轮 image tag，同时保持 `RoutingEnabled=false`、`DesiredCount=0`，证明安全重试顺序实际生效。数据库 Task revision 2 再次应用退出 1；日志显示直接 `$1::text` 会让 pgx 要求把 Go `int` 编码为 PostgreSQL text。最终修复不再让同一参数承担两种类型：`$1::bigint` 仅接收 `int64` PR number，`$2::text` 仅接收 Go `string` 介绍内容；参数构造函数和测试同时验证数量、运行时类型与禁止角色混用。三份 worktree 的 previewdb 测试、主 Go 模块 gofmt/vet/全量 tests 与 infra 检查全部通过。仍需推送分离参数修复完成下一轮云端验收。
+
+阶段 10 第六轮验证（2026-07-17）：PR #1/#2 最终提交 `ad3d2df...` / `dffcf06...` 分别触发 CodeBuild `082d1c5a...` / `00ca6bc9...`，两条构建均精确解析对应 40 位 head SHA 并全阶段 `SUCCEEDED`。新增测试直接使用 pgx type map 按 PostgreSQL `int8` OID 编码 `int64`、按 `text` OID 编码 Go `string`，覆盖此前真实失败层。两个 database Task 返回 0 后，Stack 才从安全态切换至 `RoutingEnabled=true`、`DesiredCount=1`；两个 ECS Service 均为 FARGATE_SPOT、running/pending=`1/0`、rollout completed，两个独立 Target 均 healthy。Task Definition 分别固定 `DB_SCHEMA=pr_1` / `pr_2`；ALB priority 1/2 分别要求各自 `X-Preview-Environment` 并转发到不同 Target Group。通过 API Gateway 实测两个 Header 均返回 200，响应字段结构相同但 SHA-256 不同；不带 Header 返回 404，证明两个 Preview 数据和 production 默认链路互不串流。Cloudflare 首轮手工重试在 `initialize` 阶段等待 6 分钟后因平台初始化超时失败，未进入 clone/build/deploy；同一提交再次重试后，PR #1/#2 分别生成独立 Cloudflare Preview deployment 与 branch alias，Dashboard 四阶段全部成功，两个 deployment URL 从公网实测均返回 HTTP 200。因此无需重装 GitHub App，前次失败判定为 Cloudflare 临时构建调度故障，Stage 10 双 PR 前后端独立环境验收完成。
 
 ## 阶段 11：清理、监控和文档
 
 - [x] T-1101：PR merged/closed 自动删除 rule/service/target group/schema。
-- [ ] T-1102：添加 TTL tags、定时兜底清理与 ECR lifecycle。
+- [x] T-1102：添加 TTL tags、定时兜底清理与 ECR lifecycle。
 - [x] T-1103：添加 ALB/ECS/API Gateway 告警和运行手册。
 - [x] T-1104：更新 README、部署文档、架构图和故障排查说明。
-- [ ] T-1105：执行目标级完成审计，逐项验证 requirements 与 acceptance criteria。
+- [x] T-1105：执行目标级完成审计，逐项验证 requirements 与 acceptance criteria。
 
-阶段 11 本地实现状态（2026-07-16）：PR close/merge buildspec 已按 rule/service → schema → stack 的顺序实现清理；ECR 14 天 lifecycle 与 `ExpiresAt` tag 已存在。production stack 新增 ALB unhealthy/target 5xx、ECS running-task/high-CPU 告警，server stack 新增 HTTP API 5xx 告警，均可选接入现有 SNS Topic 且不新增 IAM Role。`infra/RUNBOOK.md` 与 `docs/go-profile-platform.svg` 已加入。T-1102 只剩定时兜底触发器；EventBridge 启动 CodeBuild 需要额外 invocation role，需由用户先决定是否接受第五个窄权限角色。T-1105 必须结合真实 AWS 部署验收，因此保持未完成。
+阶段 11 TTL 云端状态（2026-07-17）：PR close/merge buildspec 已按 rule/service → schema → stack 的顺序实现清理；ECR 14 天 lifecycle 与 `ExpiresAt` tag 已存在。IAM Change Set `stage11-preview-ttl-iam-review` 已执行，Preview CodeBuild Role 原地更新且保持四角色边界；实际 trust policy 只允许同账户、精确 TTL Rule ARN 的 EventBridge，inline policy 只增加 `tag:GetResources` 以及对 preview/TTL 两个 project 的 `codebuild:StartBuild`、`codebuild:BatchGetBuilds`。CodeBuild Change Set `stage11-preview-ttl-codebuild-review` 也已执行，栈为 `UPDATE_COMPLETE`；新增 NO_SOURCE、非 privileged 的 `github-account-info-go-preview-ttl-cleanup` 与已启用的 `cron(0 3 * * ? *)` EventBridge Rule，Target 精确指向该 project 并复用受限 Preview Role。手动空扫描 build `6e3a32f0...` 全阶段 `SUCCEEDED`，日志明确输出 `No tagged preview stacks were found`；扫描前后标签 API 均无 preview Stack，且 Preview 项目最新构建仍是更早的 PR #2 cleanup，证明空扫描没有误触发任何清理。production stack 新增 ALB unhealthy/target 5xx、ECS running-task/high-CPU 告警，server stack 新增 HTTP API 5xx 告警，均可选接入现有 SNS Topic。`infra/RUNBOOK.md` 与 `docs/go-profile-platform.svg` 已加入；F-032 与 T-1102 云端验收完成，T-1105 保持未完成。
+
+阶段 11 PR close 云端验收（2026-07-17）：关闭临时 PR #1/#2 后，GitHub webhook 分别触发 cleanup build `1dcedd0d...` / `67f874b6...`，两条构建均在 `POST_BUILD` 完成并最终 `SUCCEEDED`。CloudFormation 事件证明两个 Stack 先删除 `PreviewService`、完成安全缩容更新，再执行 database drop 和 Stack 删除；build 的 `exit_code == 0` 安全门通过后分别输出 `pr_1` / `pr_2` 已移除。独立复核显示两个 PR Stack 均不存在，ECS 中无 `-pr-` Service，Internal ALB 中无 priority 1/2 Rule，也无 `pr-` Target Group；production `/healthz` 仍返回 200。因此 T-1101、F-031 与 AC-010 的真实自动清理验收完成。
+
+目标级完成审计（2026-07-17）：逐项复核 requirements F-001～F-038、非功能需求和 AC-001～AC-011，所有条目均已有代码、自动化测试或真实云端/浏览器证据。Cloudflare Production `f73475d` 重新部署成功后，Chrome 无痕窗口在空 localStorage、无 token 状态下直接访问 `/u/StarCoderLn` 并完整展示个人介绍，补齐最后的 AC-003。最终回归再次通过 `pnpm check:infra`、Go `vet`/全量测试、Web production build/TypeScript 检查与 Server TypeScript 检查；`git diff --check` 无格式错误。功能目标与运行时验收已完成，仓库收口只剩提交并推送当前 Stage 10/11 最终改动和验收记录。
 
 安全审计补充（2026-07-16）：仅给 Cloudflare 页面配置 Access 无法阻止调用者绕过 Cloudflare 直连 API Gateway。`managementProcedure` 覆盖 account list/CRUD、GitHub PAT 拉取与 introduction generate，代码默认仍为关闭；根据用户确认的渐进迁移方案，production 模板显式设置 `MANAGEMENT_API_ENABLED=true`，保留原 Node → RDS 账号链路，仅新增 Lambda → Cloud Map → Go 的介绍生成链路。这一兼容性选择不等于认证，公开写入口只适用于当前个人学习项目风险模型。
 
