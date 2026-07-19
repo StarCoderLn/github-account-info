@@ -1,9 +1,21 @@
+# Go 平台的 IAM 权限 Stack。这里把 runtime execution role 与 CI/CD role 分开：
+# ECS Execution Role 只负责“启动 Task 前”拉镜像、写日志、取 Secret；应用容器
+# 本身没有 AWS API 权限。CodeBuild Role 才负责部署 CloudFormation/ECS/ALB。
+# production 和 preview 再使用不同角色，防止 preview 读取生产数据库 Secret。
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Four isolated IAM roles for the github-account-info Go platform:
   production/preview ECS task execution and production/preview CodeBuild.
   This stack depends on exports from go-foundation.yaml. Go containers call no
   AWS APIs and intentionally have no task role.
+
+# 本文件内置函数阅读提示：
+# - !Ref SecretArnParameter 返回传入的 ARN；!Ref IAM Role 返回角色名称。
+# - !GetAtt Role.Arn 返回完整角色 ARN，是 ECS/CodeBuild 配置角色时需要的值。
+# - !Sub 负责拼角色名和 ARN，其中 AWS::Partition/Region/AccountId 是伪参数。
+# - Fn::ImportValue 读取 foundation Stack 的 Export，例如 ECR/LogGroup ARN。
+# - !If [HasKey, statement, !Ref AWS::NoValue] 表示仅使用自定义 KMS Key 时
+#   才保留该 Statement；AWS::NoValue 会把整段从最终策略移除。
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -26,6 +38,8 @@ Metadata:
         default: Preview-only DATABASE_URL Secret ARN
 
 Parameters:
+  # Secret ARN 作为参数传入，模板只保存 ARN，不保存数据库连接串本身。
+  # KMS Key ARN 可留空：使用 Secrets Manager 默认托管密钥时无需额外解密授权。
   ProjectName:
     Type: String
     Default: github-account-info-go
@@ -57,6 +71,8 @@ Parameters:
       KMS key ARN used by the preview secret.
 
 Conditions:
+  # 条件用于判断是否传入自定义 KMS Key。为 false 时，!If 返回
+  # AWS::NoValue，CloudFormation 会从最终资源定义中移除对应 policy statement。
   HasDatabaseSecretKmsKey: !Not
     - !Equals
       - !Ref DatabaseSecretKmsKeyArn
@@ -67,9 +83,12 @@ Conditions:
       - ""
 
 Resources:
+  # production ECS Task Execution Role。AssumeRolePolicyDocument 是“信任策略”，
+  # 决定谁能扮演角色；下面的 Policies 是“权限策略”，决定扮演后能做什么。
   EcsTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
+      # !Sub 把 ProjectName 参数嵌入角色名；名称变化可能触发 IAM Role 替换。
       RoleName: !Sub ${ProjectName}-execution-role
       Path: /github-account-info/
       Description: Pulls the Go image, writes logs, and injects the database secret.
@@ -85,6 +104,7 @@ Resources:
                 aws:SourceAccount: !Ref AWS::AccountId
               ArnLike:
                 aws:SourceArn: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*
+      # 权限按用途拆分，便于审计：ECR/Logs 与 Secret/KMS 不混在一起。
       Policies:
         - PolicyName: pull-image-and-write-logs
           PolicyDocument:
@@ -101,6 +121,8 @@ Resources:
                   - ecr:BatchGetImage
                   - ecr:GetDownloadUrlForLayer
                 Resource:
+                  # ImportValue 的参数是 foundation Stack 发布的 Export 名；
+                  # 内层 !Sub 先把 ProjectName 拼进这个 Export 名。
                   Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryArn
               - Sid: WriteOnlyToProjectLogGroup
                 Effect: Allow
@@ -121,6 +143,8 @@ Resources:
                   - secretsmanager:GetSecretValue
                 Resource: !Ref DatabaseUrlSecretArn
               - !If
+                # !If 列表依次为 Condition、true 分支、false 分支；false 时
+                # AWS::NoValue 删除整个 KMS Statement，而不是留下空 Resource。
                 - HasDatabaseSecretKmsKey
                 - Sid: DecryptDatabaseSecret
                   Effect: Allow
@@ -139,6 +163,8 @@ Resources:
           Value: cloudformation
 
   PreviewEcsTaskExecutionRole:
+    # preview 专用 Execution Role。它只能读取 preview Secret，刻意不授予
+    # production Secret ARN，从 IAM 层阻断预览环境读取生产数据。
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub ${ProjectName}-preview-execution-role
@@ -158,6 +184,7 @@ Resources:
                 aws:SourceAccount: !Ref AWS::AccountId
               ArnLike:
                 aws:SourceArn: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*
+      # 与 production 使用同一个 ECR/日志基础设施，但数据库凭证严格分离。
       Policies:
         - PolicyName: pull-preview-image-and-write-logs
           PolicyDocument:
@@ -211,6 +238,8 @@ Resources:
           Value: cloudformation
 
   CodeBuildRole:
+    # production CodeBuild Role：允许构建/推送镜像，并只管理 production
+    # CloudFormation Stack、ECS Service、Target Group 和 Listener Rule。
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub ${ProjectName}-production-codebuild-role
@@ -228,6 +257,8 @@ Resources:
                 aws:SourceAccount: !Ref AWS::AccountId
               ArnEquals:
                 aws:SourceArn: !Sub arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${ProjectName}-production
+      # 每个 Statement 都尽量限制 Resource；iam:PassRole 还通过
+      # iam:PassedToService 限定只能把 Execution Role 交给 ECS Task。
       Policies:
         - PolicyName: build-logs-and-ecr-push
           PolicyDocument:
@@ -398,6 +429,8 @@ Resources:
           Value: cloudformation
 
   PreviewCodeBuildRole:
+    # preview CodeBuild Role 同时被 PR webhook build 和定时 TTL cleanup 使用。
+    # ARN 通配符只覆盖 pr-* 资源，避免它修改 production Stack/Service。
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub ${ProjectName}-preview-codebuild-role
@@ -430,6 +463,8 @@ Resources:
                 aws:SourceAccount: !Ref AWS::AccountId
               ArnEquals:
                 aws:SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${ProjectName}-preview-ttl-cleanup
+      # SourceArn 信任条件把普通 preview 项目和 EventBridge 定时任务都限制在
+      # 当前账户的精确 ARN；下面权限还按日志、ECR、CFN/ECS、ALB 分组。
       Policies:
         - PolicyName: preview-build-logs-and-ecr-push
           PolicyDocument:
@@ -622,7 +657,10 @@ Resources:
           Value: cloudformation
 
 Outputs:
+  # 角色 ARN/名称和 Secret ARN 通过 Export 暴露给 foundation、production、
+  # preview 与 codebuild Stack。输出的是标识符，不会泄露 Secret 内容。
   EcsTaskExecutionRoleArn:
+    # !GetAtt 明确读取 Role.Arn；若写 !Ref EcsTaskExecutionRole 只会得到角色名。
     Value: !GetAtt EcsTaskExecutionRole.Arn
     Export:
       Name: !Sub ${ProjectName}-EcsTaskExecutionRoleArn

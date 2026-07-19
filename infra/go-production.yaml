@@ -1,7 +1,19 @@
+# Go API production 工作负载 Stack。共享网络、ECR、ECS Cluster、Cloud Map、
+# IAM Role 都通过 ImportValue 从其他 Stack 引用；本 Stack 只拥有可频繁更新的
+# TaskDefinition、TargetGroup、ListenerRule、ECS Service 和监控告警。
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Production runtime for the github-account-info Go API. Requires the shared
   go-foundation stack exports and an immutable prod-<commit-sha> ECR image.
+
+# 本文件内置函数阅读提示：
+# - !Ref Parameter 返回输入值；!Ref TaskDefinition/TargetGroup/Service 返回该资源
+#   定义的主标识（可能是 ARN、名称或 ID，具体需查对应资源文档）。
+# - !Sub 用参数/伪参数拼 Family、资源名和告警名。
+# - Fn::ImportValue 从 foundation/IAM Stack 读取 Export，是跨 Stack 引用。
+# - !Join 将 ECR URI、冒号和 ImageTag 合成完整容器镜像地址。
+# - !GetAtt TargetGroup.TargetGroupFullName 读取 Ref 无法选择的特定属性。
+# - !If + AWS::NoValue 在未传 SNS Topic 时移除告警通知动作。
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -29,6 +41,8 @@ Metadata:
         default: Comma-separated exact browser origins
 
 Parameters:
+  # ImageTag 通常传不可变的 Git SHA，而不是 latest，确保每次部署可追溯、可回滚。
+  # DesiredCount、CORS 和 Listener Priority 则是环境级运行参数。
   ProjectName:
     Type: String
     Default: github-account-info-go
@@ -74,15 +88,19 @@ Parameters:
       Leave empty to create visible CloudWatch alarms without notifications.
 
 Conditions:
+  # SNS Topic 留空时不创建 AlarmActions/OKActions；AWS::NoValue 会移除列表项。
   HasAlarmTopic: !Not
     - !Equals
       - !Ref AlarmTopicArn
       - ""
 
 Resources:
+  # TaskDefinition 是不可变版本资源：容器镜像或配置变化会注册新 revision，
+  # ECS Service 再切换到新 revision；旧 revision 保留以支持快速回滚。
   ProductionTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
+      # !Sub 输出例如 github-account-info-go-production，作为 TaskDefinition Family。
       Family: !Sub ${ProjectName}-production
       RequiresCompatibilities:
         - FARGATE
@@ -90,6 +108,8 @@ Resources:
       Cpu: "256"
       Memory: "512"
       ExecutionRoleArn:
+        # ImportValue 读取 IAM Stack 导出的角色 ARN；Fn::ImportValue 的参数
+        # 不能直接写短格式 !ImportValue !Sub，因此这里使用完整函数写法。
         Fn::ImportValue: !Sub ${ProjectName}-EcsTaskExecutionRoleArn
       RuntimePlatform:
         CpuArchitecture: X86_64
@@ -98,6 +118,9 @@ Resources:
         - Name: go-api
           Essential: true
           Image: !Join
+            # !Join 将 ECR RepositoryUri、冒号和 ImageTag 拼成完整镜像地址。
+            # 第一个元素是分隔符，第二个元素是待拼接列表，结果类似
+            # 123.dkr.ecr.../repo:prod-<sha>。
             - ":"
             - - Fn::ImportValue: !Sub ${ProjectName}-EcrRepositoryUri
               - !Ref ImageTag
@@ -123,6 +146,8 @@ Resources:
             - Name: CORS_PREVIEW_ORIGIN_SUFFIX
               Value: !Ref CorsPreviewOriginSuffix
           Secrets:
+            # ECS 在启动容器前从 Secrets Manager 注入 DATABASE_URL；
+            # Secret 值不会出现在 TaskDefinition 明文或 CloudFormation 输出中。
             - Name: DATABASE_URL
               ValueFrom:
                 Fn::ImportValue: !Sub ${ProjectName}-DatabaseUrlSecretArn
@@ -149,6 +174,8 @@ Resources:
           Value: !Ref ImageTag
 
   ProductionTargetGroup:
+    # TargetType=ip 是 Fargate awsvpc 模式的必需配置，因为 Task 没有 EC2
+    # instance ID。健康检查走 /readyz，只有依赖就绪的 Task 才接收流量。
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       Name: !Sub ${ProjectName}-prod
@@ -183,6 +210,8 @@ Resources:
           Value: cloudformation
 
   ProductionListenerRule:
+    # production 使用固定优先级和 /api/v1/*、/healthz、/readyz 路径匹配；
+    # Listener 默认动作仍是 404，只有命中规则的请求才进入 Target Group。
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
       ListenerArn:
@@ -200,6 +229,8 @@ Resources:
           TargetGroupArn: !Ref ProductionTargetGroup
 
   ProductionService:
+    # ECS Service 维持 DesiredCount，并执行滚动更新。DependsOn 确保 Listener
+    # Rule 已建立后再启动 Service，避免注册/部署期间出现顺序问题。
     Type: AWS::ECS::Service
     DependsOn:
       - ProductionListenerRule
@@ -207,6 +238,7 @@ Resources:
       ServiceName: !Sub ${ProjectName}-production
       Cluster:
         Fn::ImportValue: !Sub ${ProjectName}-EcsClusterArn
+      # 对 ECS::TaskDefinition 使用 !Ref 返回完整 ARN，并包含具体 revision。
       TaskDefinition: !Ref ProductionTaskDefinition
       DesiredCount: !Ref DesiredCount
       PlatformVersion: LATEST
@@ -221,6 +253,8 @@ Resources:
           Base: 1
           Weight: 1
       DeploymentConfiguration:
+        # minimumHealthyPercent=100 保证滚动发布时旧 Task 在新 Task 健康前不退出；
+        # maximumPercent=200 允许临时运行两倍 Task 完成零停机替换。
         MinimumHealthyPercent: 100
         MaximumPercent: 200
         DeploymentCircuitBreaker:
@@ -239,6 +273,7 @@ Resources:
           ContainerPort: 8080
           TargetGroupArn: !Ref ProductionTargetGroup
       ServiceRegistries:
+        # 注册到 Cloud Map 后，Node Lambda 可通过私有 DNS 直接访问 Go Task。
         - RegistryArn:
             Fn::ImportValue: !Sub ${ProjectName}-CloudMapServiceArn
       Tags:
@@ -252,6 +287,7 @@ Resources:
           Value: !Ref ImageTag
 
   ProductionUnhealthyTargetsAlarm:
+    # Target Group 出现不健康目标时报警，用于发现 readiness、网络或进程故障。
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub ${ProjectName}-production-unhealthy-targets
@@ -263,6 +299,8 @@ Resources:
           Value:
             Fn::ImportValue: !Sub ${ProjectName}-InternalLoadBalancerFullName
         - Name: TargetGroup
+          # CloudWatch 维度需要 TargetGroupFullName；!GetAtt 可明确选择该属性，
+          # 而 !Ref ProductionTargetGroup 返回的是 Target Group ARN。
           Value: !GetAtt ProductionTargetGroup.TargetGroupFullName
       Statistic: Maximum
       Period: 60
@@ -282,6 +320,7 @@ Resources:
           Value: production
 
   ProductionTarget5xxAlarm:
+    # 监控 Go Target 返回的 5xx；与 API Gateway 5xx 分开，便于判断错误层级。
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub ${ProjectName}-production-target-5xx
@@ -312,6 +351,7 @@ Resources:
           Value: production
 
   ProductionRunningTaskCountAlarm:
+    # RunningTaskCount 低于 1 表示 production 已无可服务 Task，是高优先级故障。
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub ${ProjectName}-production-no-running-task
@@ -342,6 +382,7 @@ Resources:
           Value: production
 
   ProductionHighCpuAlarm:
+    # CPU 持续过高可能表示流量激增、死循环或容量不足；连续周期触发以减少噪声。
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub ${ProjectName}-production-high-cpu
@@ -372,6 +413,8 @@ Resources:
           Value: production
 
 Outputs:
+  # 输出当前镜像、TaskDefinition、TargetGroup 与 Service 标识，供部署脚本验收
+  # 和人工回滚使用；这些输出没有 Export，不构成新的跨 Stack 耦合。
   ImageTag:
     Description: Immutable ECR tag deployed by this stack revision.
     Value: !Ref ImageTag

@@ -551,13 +551,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4          # ① 拉代码
+      - uses: actions/checkout@v7          # ① 拉代码
 
-      - uses: pnpm/action-setup@v4          # ② 装 pnpm（版本与本地锁定一致）
+      - uses: pnpm/action-setup@v6          # ② 装 pnpm（版本与本地锁定一致）
         with:
           version: 10.24.0
 
-      - uses: actions/setup-node@v4         # ③ 装 Node 22 并启用 pnpm store 缓存
+      - uses: actions/setup-node@v7         # ③ 装 Node 22 并启用 pnpm store 缓存
         with:
           node-version: 22
           cache: pnpm
@@ -570,12 +570,12 @@ jobs:
         working-directory: apps/server
 
       - name: Configure AWS credentials     # ⑥ ★ OIDC 换取短期 AWS 凭证，全程无长期密钥
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::879980498268:role/github-actions-deployer
           aws-region: us-east-2
 
-      - uses: aws-actions/setup-sam@v2      # ⑦ 装 SAM CLI
+      - uses: aws-actions/setup-sam@v3      # ⑦ 装 SAM CLI
 
       - name: Deploy Lambda                 # ⑧ 部署；参数覆盖 samconfig.toml 的默认值
         run: |
@@ -593,6 +593,29 @@ jobs:
 **OIDC 原理**：GitHub 为每次 workflow 运行签发一个短期 OIDC token，AWS IAM 侧配置了信任 GitHub 的身份提供商（IdP），并限定只有本仓库的 workflow 才能扮演 `github-actions-deployer` 这个角色。**没有任何长期密钥存在于 GitHub**，凭证随任务结束自动失效。
 
 > SAM 相关配置一共三份，各管一段：`template.yaml`（声明云上资源，见 [2.3 步骤 4](#步骤-4写-sam-templateyaml)）→ `samconfig.toml`（sam deploy 的默认参数）→ `deploy.yml`（CI 里何时、以什么身份、用什么参数执行 sam deploy）。
+
+> GitHub Actions 的 Node.js 弃用警告说的是 Action 自身的内部运行时，不是 `setup-node` 安装给项目使用的 Node 版本。当前 workflow 使用支持 Node.js 24 的 `checkout@v7`、`setup-node@v7`、`configure-aws-credentials@v6`、`setup-sam@v3` 和 `pnpm/action-setup@v6`；项目构建仍固定使用 Node 22。
+
+### 4.1 部署角色权限也必须进入 IaC
+
+`AWSCloudFormationFullAccess` 只允许调用 CloudFormation 控制面，不会自动赋予 CloudFormation 操作每种底层资源的权限。SAM 模板新增 API Gateway access log 与 5xx alarm 后，实际部署者 `github-actions-deployer` 还需要：
+
+- CloudWatch Logs 标签与保留期权限。
+- `CreateLogDelivery` 等 API Gateway → CloudWatch Logs 投递配置权限。
+- `PutMetricAlarm` 等 CloudWatch Alarm 生命周期权限。
+
+第一次遗漏时，CloudFormation 会在更新时失败；自动回滚又执行相同 API，于是可能进一步卡成 `UPDATE_ROLLBACK_FAILED`。这不等于线上 API 立即中断，但会锁住后续 Stack 更新。
+
+临时 inline policy 适合单角色紧急恢复，但长期事实来源是 `infra/server-deployer-policy.yaml`：它创建 customer managed policy 并附加到同一个现有 Role，不替换 Role，不改变 workflow 中的 ARN，也不触碰 Lambda/API/ECS/RDS。迁移固定为：
+
+```text
+创建并审查 ManagedPolicy Change Set
+→ 执行并确认策略已附加
+→ 成功运行一次 Deploy Lambda
+→ 删除旧 inline policy
+```
+
+不能先删 inline policy，否则会制造部署权限空窗；也不要为了省事附加 `CloudWatchFullAccess`。部分 Log Delivery action 因 AWS 不支持 resource-level authorization 必须使用 `Resource: "*"`，所以静态校验同时固定了 action allowlist，禁止扩大为日志读取或日志组删除权限。
 
 ---
 
@@ -828,6 +851,7 @@ defaultOptions: { queries: { refetchOnWindowFocus: false } }
 | CORS 精确配置了还是拦 | origin 端口不匹配（5173 vs 3001） | 固定 Vite 端口，与 CORS_ORIGIN 对齐 |
 | GitHub Actions changeset OBSOLETE | 并发部署，前一个 changeset 还在执行 | re-run；避免连推；可配 concurrency |
 | SAM 部署"无变化"报错 | changeset 为空默认失败 | `--no-fail-on-empty-changeset` |
+| Stack `UPDATE_ROLLBACK_FAILED`，Events 报 Logs/Alarm AccessDenied | 部署 Role 只有 CloudFormation 控制面权限，缺少底层资源操作 | 先更新 `server-deployer-policy`，再 `continue-update-rollback`，最后重跑 workflow |
 | Cloudflare Pages 一直 skipped | monorepo watch paths glob 误判 | 清空 watch paths，全量触发 |
 | Cloudflare "No deployment available" | 连推导致前一构建被取消 | 手动 Retry deployment |
 | 删除按钮先消失、卡片后消失 | 同步状态与异步请求之间的中间态 | setQueryData 乐观更新 + onSettled invalidate |

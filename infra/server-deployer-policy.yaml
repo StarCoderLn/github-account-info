@@ -1,0 +1,101 @@
+# Node/SAM deployment role 的补充权限 Stack。它不创建或替换 OIDC Role，
+# 只创建一份 customer managed policy 并绑定现有 github-actions-deployer。
+# 这样 deploy.yml 的 role ARN、现有业务资源和请求链路都保持不变。
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Least-privilege supplemental policy for the existing GitHub Actions role that
+  deploys the Node/SAM edge stack. It manages only the API access log delivery,
+  the retained access log group, and the HTTP API 5xx alarm.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Existing deployment identity
+        Parameters:
+          - DeploymentRoleName
+      - Label:
+          default: Server observability resources
+        Parameters:
+          - ProjectName
+          - AccessLogGroupName
+
+Parameters:
+  DeploymentRoleName:
+    Type: String
+    Default: github-actions-deployer
+    AllowedPattern: "^[A-Za-z0-9+=,.@_-]{1,64}$"
+    Description: Existing OIDC role assumed by .github/workflows/deploy.yml.
+  ProjectName:
+    Type: String
+    Default: github-account-info-go
+    MinLength: 3
+    MaxLength: 22
+    AllowedPattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+    Description: Must match the ProjectName used by apps/server/template.yaml.
+  AccessLogGroupName:
+    Type: String
+    Default: /aws/apigateway/github-account-info-http-api
+    AllowedPattern: "^[._/#A-Za-z0-9-]+$"
+    Description: Must match HttpApiAccessLogGroup.LogGroupName in the SAM stack.
+
+Resources:
+  ServerObservabilityDeployPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${ProjectName}-server-observability-deploy
+      Description: >-
+        Allows the existing GitHub Actions deployer to manage only the server
+        stack's API access logging and HTTP API 5xx alarm.
+      Roles:
+        - !Ref DeploymentRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # 标准 Log Group ARN（不带 :*）适用于标签与日志组级操作。
+          - Sid: ManageApiGatewayAccessLogGroup
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:DeleteRetentionPolicy
+              - logs:ListTagsForResource
+              - logs:PutRetentionPolicy
+              - logs:TagResource
+              - logs:UntagResource
+            Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${AccessLogGroupName}
+          # Log delivery/resource policy API 不支持按单个 Log Group ARN 收紧。
+          # 这里只授予配置投递所需 action，不授予读取日志内容或删除日志组。
+          - Sid: ManageApiGatewayLogDelivery
+            Effect: Allow
+            Action:
+              - logs:CreateLogDelivery
+              - logs:DeleteLogDelivery
+              - logs:DescribeLogGroups
+              - logs:DescribeResourcePolicies
+              - logs:GetLogDelivery
+              - logs:ListLogDeliveries
+              - logs:PutResourcePolicy
+              - logs:UpdateLogDelivery
+            Resource: "*"
+          - Sid: ManageHttpApi5xxAlarm
+            Effect: Allow
+            Action:
+              - cloudwatch:DeleteAlarms
+              - cloudwatch:ListTagsForResource
+              - cloudwatch:PutMetricAlarm
+              - cloudwatch:TagResource
+              - cloudwatch:UntagResource
+            Resource: !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ProjectName}-http-api-5xx
+          # DescribeAlarms 不支持按 alarm ARN 授权。
+          - Sid: DescribeCloudWatchAlarms
+            Effect: Allow
+            Action: cloudwatch:DescribeAlarms
+            Resource: "*"
+
+Outputs:
+  ManagedPolicyArn:
+    Description: Customer managed policy attached to the existing deployer role.
+    Value: !Ref ServerObservabilityDeployPolicy
+  AttachedRoleName:
+    Description: Existing OIDC role; this Stack does not own or replace it.
+    Value: !Ref DeploymentRoleName

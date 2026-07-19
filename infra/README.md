@@ -11,6 +11,7 @@
 - `go-production.yaml`：production Task Definition、Target Group、ALB path rule 和 ECS Service；只接受不可变的 `prod-<commit-sha>` image tag。
 - `go-preview.yaml`：承载单个 PR 的 runtime/database Task Definition、Fargate Spot Service、Target Group 和 header Listener Rule。
 - `codebuild.yaml`：production 与 preview 两个权限隔离的 CodeBuild project；PR buildspec 内联且需要可信成员审批。
+- `server-deployer-policy.yaml`：绑定现有 `github-actions-deployer` 的 customer managed policy；只管理 Node/SAM 公网入口的 access log 与 5xx alarm，不创建或替换 OIDC Role。
 - `buildspec/go-production.yml`：格式、依赖、静态检查、测试、镜像构建/推送、production 部署与 smoke-test 回滚。
 - `RUNBOOK.md`：CloudWatch 告警、API/ALB/ECS/Cloud Map 分层排障、production 回滚和 PR 清理审计。
 
@@ -42,12 +43,75 @@
 
 preview Secret 使用名称 `github-account-info/preview/database-url`。它不能复用 production URL，应连接同一 RDS 实例里的独立 `github_account_info_preview` database。这样不增加第二个 RDS 实例费用，同时 production 表不会出现在 preview database 中；每个 PR 再在其中使用独立 `pr_<number>` schema。
 
+`server-deployer-policy.yaml` 只引用现有 OIDC Role 名称和 SAM 模板中已经固定的资源名称：
+
+| 参数 | 内容 | 要求 |
+| --- | --- | --- |
+| `DeploymentRoleName` | GitHub Actions Assume 的现有角色 | 默认 `github-actions-deployer`；模板只附加 managed policy，不拥有该角色 |
+| `ProjectName` | server stack 的 ProjectName | 必须与 `apps/server/template.yaml` 一致，用于约束 5xx Alarm ARN |
+| `AccessLogGroupName` | API Gateway access log group | 必须与 `HttpApiAccessLogGroup.LogGroupName` 一致 |
+
 `infra/parameters/` 默认忽略本地参数文件，只保留无真实资源 ID 的 example。复制后可创建未提交文件：
 
 ```bash
 cp infra/parameters/go-foundation.example.json infra/parameters/go-foundation.local.json
 cp infra/parameters/go-iam.example.json infra/parameters/go-iam.local.json
 ```
+
+## Node/SAM 部署角色权限迁移
+
+`github-actions-deployer` 曾用 Console inline policy 临时补齐 API Gateway access log 与 CloudWatch Alarm 权限。长期方案由 `server-deployer-policy.yaml` 创建 customer managed policy，再绑定同一个 Role；`.github/workflows/deploy.yml` 的 Role ARN、Node/SAM Stack 和所有运行时资源均不变化。
+
+迁移必须遵循“先附加、后删除”，避免权限空窗：
+
+```bash
+sam validate \
+  --template-file infra/server-deployer-policy.yaml \
+  --lint
+
+aws cloudformation create-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-server-deployer-policy \
+  --change-set-name managed-policy-migration-review \
+  --change-set-type CREATE \
+  --template-body file://infra/server-deployer-policy.yaml \
+  --parameters file://infra/parameters/server-deployer-policy.example.json \
+  --capabilities CAPABILITY_NAMED_IAM
+
+aws cloudformation describe-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-server-deployer-policy \
+  --change-set-name managed-policy-migration-review \
+  --query 'Changes[].ResourceChange.{Action:Action,LogicalId:LogicalResourceId,Type:ResourceType,Replacement:Replacement}' \
+  --output table
+```
+
+Change Set 必须只有一个 `AWS::IAM::ManagedPolicy` 的 `Add`，不得出现 `AWS::IAM::Role`、replacement 或业务资源。用户审查后亲自执行：
+
+```bash
+aws cloudformation execute-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-server-deployer-policy \
+  --change-set-name managed-policy-migration-review
+
+aws cloudformation wait stack-create-complete \
+  --region us-east-2 \
+  --stack-name github-account-info-server-deployer-policy
+
+aws iam list-attached-role-policies \
+  --role-name github-actions-deployer \
+  --query 'AttachedPolicies[?PolicyName==`github-account-info-go-server-observability-deploy`]'
+```
+
+只有确认 Stack 为 `CREATE_COMPLETE`、managed policy 已附加，并成功完成一次 `Deploy Lambda` 后，才删除旧 inline policy：
+
+```bash
+aws iam delete-role-policy \
+  --role-name github-actions-deployer \
+  --policy-name ManageGithubAccountInfoApiLogTags
+```
+
+删除 inline policy 后再次确认角色上只剩 customer managed policy 提供这组权限。该 IAM Stack 不产生运行费用；删除它会从角色解绑策略，因此不可在没有等价替代策略时删除。历史 AWS managed `*FullAccess` 策略的收敛是独立安全工作，应基于 CloudTrail/IAM Access Analyzer 生成使用证据后分批替换，不能与本次无中断迁移一起冒险修改。
 
 ## 阶段 5 操作顺序
 

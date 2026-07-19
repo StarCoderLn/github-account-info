@@ -1,0 +1,14 @@
+[
+	{
+		"ParameterKey": "DeploymentRoleName",
+		"ParameterValue": "github-actions-deployer"
+	},
+	{
+		"ParameterKey": "ProjectName",
+		"ParameterValue": "github-account-info-go"
+	},
+	{
+		"ParameterKey": "AccessLogGroupName",
+		"ParameterValue": "/aws/apigateway/github-account-info-http-api"
+	}
+]

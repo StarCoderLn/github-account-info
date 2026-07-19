@@ -1,14 +1,25 @@
+# SAM CLI 配置文件。命令行未显式传入的 deploy/global 参数会从这里读取；
+# [default.*] 中的 default 是环境名，也可以再定义 staging、production 等环境。
 version = 0.1
 
 [default.deploy.parameters]
+# CloudFormation Stack 名，与 template.yaml 中的逻辑资源 ID 共同确定实际资源。
 stack_name = "github-account-info"
+# 让 SAM 自动创建/选择托管 S3 Bucket 上传 Lambda 构建产物。
 resolve_s3 = true
+# 上传到托管 Bucket 时使用的对象 key 前缀，方便区分不同项目。
 s3_prefix = "github-account-info"
 region = "us-east-2"
+# 本地手动 sam deploy 默认先展示 Change Set 并等待确认；CI workflow 会用
+# --no-confirm-changeset 显式覆盖它，实现无人值守部署。
 confirm_changeset = true
+# 模板会由 SAM 生成/更新 IAM 资源，因此必须明确确认 CAPABILITY_IAM。
 capabilities = "CAPABILITY_IAM"
+# 部署失败时允许 CloudFormation 自动回滚到上一稳定状态。
 disable_rollback = false
+# 本项目 Lambda 使用 zip bundle 而非容器镜像，因此无需配置 image repository。
 image_repositories = []
 
 [default.global.parameters]
+# global region 同时作为 build/deploy 等 SAM 子命令的默认区域。
 region = "us-east-2"
