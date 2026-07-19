@@ -76,6 +76,35 @@ curl --fail-with-body --silent --show-error \
 - Cloud Map service 中注册的实例 IP 是否与当前 running task ENI 一致。
 - Lambda 的 `GO_API_INTERNAL_URL` 是否仍为私有 DNS，且没有 `/internal` 公开路由。
 
+## Node/SAM Stack 更新失败与 IAM 恢复
+
+GitHub Actions 页面只显示 `Process completed with exit code 1` 时，不要从 warning 猜根因。先读 CloudFormation Events 中时间最早的具体 `*_FAILED` 资源；`Resource update cancelled` 通常只是连带结果。
+
+本项目接入 API Gateway access log 与 5xx alarm 后，部署角色必须同时具备三层权限：
+
+1. Log Group 标签/保留期：`logs:ListTagsForResource`、`TagResource`、`UntagResource`、`PutRetentionPolicy`。
+2. Log Delivery：`logs:CreateLogDelivery`、`Get/Update/DeleteLogDelivery`、`PutResourcePolicy` 等；其中部分 API 只能使用 `Resource: "*"`。
+3. CloudWatch Alarm：`cloudwatch:PutMetricAlarm`、`DeleteAlarms` 和标签权限。
+
+权限事实来源是 `infra/server-deployer-policy.yaml`；不要再通过 Console 逐条扩大 inline policy，也不要附加 `CloudWatchFullAccess`。如果 Stack 已进入 `UPDATE_ROLLBACK_FAILED`：
+
+```bash
+aws cloudformation describe-stack-events \
+  --region us-east-2 \
+  --stack-name github-account-info \
+  --max-items 30
+
+aws cloudformation continue-update-rollback \
+  --region us-east-2 \
+  --stack-name github-account-info
+
+aws cloudformation wait stack-rollback-complete \
+  --region us-east-2 \
+  --stack-name github-account-info
+```
+
+必须等到 `UPDATE_ROLLBACK_COMPLETE` 才能重新运行 `Deploy Lambda`。`continue-update-rollback` 只恢复上一稳定版本，不会自动重新应用失败的更新；恢复后仍需重跑 workflow。最终验收至少包含 Stack `UPDATE_COMPLETE`、Lambda `Active/Successful`、VPC Link `AVAILABLE`、Alarm `OK`，以及 Node root、`/healthz`、`/readyz` 均为 200。
+
 ## Production 回滚
 
 production image tag 不可变，ECS deployment circuit breaker 会自动回滚启动失败的 revision。若 smoke test 失败，CodeBuild 脚本也会恢复上一 image tag。人工处理时遵循：

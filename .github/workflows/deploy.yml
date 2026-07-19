@@ -1,5 +1,7 @@
 name: Deploy Lambda
 
+# 这是 Node Lambda 的 SAM 部署入口。只有 master 上与 server/API/DB/env 相关的
+# 文件变化才自动运行；workflow_dispatch 允许在 GitHub Actions 页面手动触发。
 on:
   push:
     branches: [master]
@@ -11,6 +13,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  # id-token: write 用于 GitHub OIDC 换取 AWS 临时凭证，不保存长期 Access Key。
   id-token: write
   contents: read
 
@@ -18,13 +21,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.24.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -33,19 +36,26 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build Lambda
+        # SAM 的 CodeUri 指向 dist/，所以必须先生成 Lambda bundle。
         run: node build.mjs
         working-directory: apps/server
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        # configure-aws-credentials 通过 OIDC AssumeRole，凭证只在当前 Job 有效。
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::879980498268:role/github-actions-deployer
           aws-region: us-east-2
 
-      - uses: aws-actions/setup-sam@v2
+      - uses: aws-actions/setup-sam@v3
 
       - name: Deploy Lambda
         run: |
+          # sam deploy 会读取 apps/server/samconfig.toml 的 Stack/Region 等默认值，
+          # 再把 template.yaml 转换并交给 CloudFormation 创建 Change Set。
+          # --no-confirm-changeset 适合 CI 自动执行；--no-fail-on-empty-changeset
+          # 让“模板没有变化”正常结束，而不是把流水线标记为失败。
+          # DatabaseUrl 只从 GitHub Actions Secret 注入，不写进仓库文件。
           sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
             --parameter-overrides \
               DatabaseUrl="${{ secrets.AWS_DATABASE_URL }}" \

@@ -1,10 +1,23 @@
+# CI/CD 基础设施 Stack：创建 production、PR preview、TTL cleanup 三个
+# CodeBuild Project，并用 CodeConnections 接收 GitHub 事件。CloudFormation
+# 负责“流水线资源”，BuildSpec 负责“流水线运行时步骤”，两层不要混淆。
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Trusted master-branch CodeBuild project for testing, building, pushing, and
   deploying the github-account-info Go API. PR builds use a separate project
   defined later and must not reuse this production webhook.
 
+# 本文件内置函数阅读提示：
+# - !Ref Parameter 返回参数值；!Ref LogGroup/CodeBuild Project 返回资源名称。
+# - !Sub 用 ProjectName 和 AWS 伪参数拼名称、ARN、环境变量值。
+# - Fn::ImportValue 从 IAM/foundation Stack 读取角色、ECR、Cluster 等 Export。
+# - !GetAtt CodeBuildProject.Arn / EventRule.Arn 获取 ARN；Ref 只返回名称。
+# - CloudFormation 函数只解析外层模板；BuildSpec: | 内的 ${SHELL_VAR} 是 Bash
+#   环境变量，不是 !Sub，占位符会留到 CodeBuild 运行时展开。
+
 Metadata:
+  # AWS::CloudFormation::Interface 只影响 Console 创建 Stack 时的参数分组，
+  # 不会创建资源，也不会改变参数校验或部署逻辑。
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
@@ -26,6 +39,8 @@ Metadata:
           - ScheduledPreviewCleanupExpression
 
 Parameters:
+  # 仓库、Connection ARN、API 地址和构建规格都从参数传入；敏感数据库连接串
+  # 不进入 CodeBuild 环境变量，而由 ECS Execution Role 在运行时读取 Secret。
   ProjectName:
     Type: String
     Default: github-account-info-go
@@ -71,9 +86,13 @@ Parameters:
       runs daily at 03:00 UTC; normal PR close cleanup remains event-driven.
 
 Resources:
+  # 将“使用这一条 GitHub Connection”的权限附加到两个由 IAM Stack 创建的
+  # CodeBuild Role。独立 AWS::IAM::Policy 可避免 IAM/CodeBuild Stack 循环依赖。
   CodeBuildConnectionUsePolicy:
     Type: AWS::IAM::Policy
     Properties:
+      # !Sub 生成策略名；下面 ImportValue 内的 !Sub 则先生成“Export 名”，
+      # 再由 Fn::ImportValue 用该名称读取另一个 Stack 的输出值。
       PolicyName: !Sub ${ProjectName}-use-github-connection
       Roles:
         - Fn::ImportValue: !Sub ${ProjectName}-CodeBuildRoleName
@@ -90,6 +109,7 @@ Resources:
             Resource: !Ref GitHubConnectionArn
 
   ProductionBuildLogGroup:
+    # production 构建日志保留 30 天，Stack 删除/替换时仍保留以便审计。
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
@@ -105,6 +125,8 @@ Resources:
           Value: cloudformation
 
   ProductionBuildProject:
+    # 只接受 master push，并用 FILE_PATH 过滤无关改动。BuildSpec 放在可信的
+    # master 仓库文件中；ConcurrentBuildLimit=1 避免并发部署同一 production Stack。
     Type: AWS::CodeBuild::Project
     DependsOn:
       - CodeBuildConnectionUsePolicy
@@ -114,6 +136,8 @@ Resources:
       ServiceRole:
         Fn::ImportValue: !Sub ${ProjectName}-CodeBuildRoleArn
       Source:
+        # CodeConnections 负责 GitHub 授权；ReportBuildStatus 会把结果回写为
+        # GitHub check。GitCloneDepth=1 可减少 production 构建下载量。
         Type: GITHUB
         Location: !Ref GitHubRepositoryUrl
         SourceIdentifier: PRIMARY_SOURCE
@@ -140,11 +164,14 @@ Resources:
       Artifacts:
         Type: NO_ARTIFACTS
       Cache:
+        # Docker layer/source cache 是 CodeBuild 宿主机本地缓存，不保证每次命中。
         Type: LOCAL
         Modes:
           - LOCAL_DOCKER_LAYER_CACHE
           - LOCAL_SOURCE_CACHE
       Environment:
+        # 构建 Docker 镜像需要 privileged 模式；这也是 production Project
+        # 只能由可信 master 触发、不能直接运行外部 PR 代码的原因。
         Type: LINUX_CONTAINER
         Image: !Ref CodeBuildImage
         ComputeType: !Ref ComputeType
@@ -205,6 +232,7 @@ Resources:
           Value: cloudformation
 
   PreviewBuildLogGroup:
+    # preview 日志保留时间更短，因为 PR 构建数量多、生命周期短。
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
@@ -220,6 +248,8 @@ Resources:
           Value: cloudformation
 
   PreviewBuildProject:
+    # PR 预览同时处理 deploy 与 cleanup。GitCloneDepth=0 保留完整提交信息；
+    # PullRequestBuildPolicy 要求有写权限的协作者批准后才运行 PR 代码。
     Type: AWS::CodeBuild::Project
     DependsOn:
       - CodeBuildConnectionUsePolicy
@@ -239,19 +269,25 @@ Resources:
         Auth:
           Type: CODECONNECTIONS
           Resource: !Ref GitHubConnectionArn
-        # Keep privileged AWS orchestration outside PR-controlled files.
+        # 安全边界：具有 AWS 部署权限的 BuildSpec 内嵌在 CloudFormation 中，
+        # PR 只能改变应用源码，不能通过修改仓库 buildspec 扩大云端权限。
         BuildSpec: |
+          # 以下内容是“嵌入字符串中的另一份 YAML”，由 CodeBuild 在运行时解析。
+          # version 0.2 让每个 phase 的 commands 在同一 shell 上下文中执行。
           version: 0.2
           env:
             shell: bash
           phases:
             install:
+              # install 只验证构建镜像中必要工具存在，不安装未经锁定的新依赖。
               commands:
                 - set -euo pipefail
                 - aws --version
                 - docker version
                 - node --version
             pre_build:
+              # pre_build 建立信任边界：校验 PR 编号和 webhook 事件，计算不可变
+              # 镜像 tag/preview key，并在 deploy 路径登录 ECR、拉取固定 digest builder。
               commands:
                 - set -euo pipefail
                 - '[[ "${CODEBUILD_SOURCE_VERSION:-}" =~ ^pr/([1-9][0-9]{0,4})$ ]] || { echo "source version must be pr/<1-49999>" >&2; exit 1; }'
@@ -291,6 +327,8 @@ Resources:
                   fi
                 - export PR_NUMBER STACK_NAME SCHEMA_NAME PREVIEW_ACTION COMMIT_SHA PREVIEW_KEY IMAGE_TAG IMAGE_URI EXPIRES_AT GO_BUILDER_IMAGE
             build:
+              # build 先做 gofmt/mod verify/vet/test，再构建非 root 镜像、推送 ECR，
+              # 最后读取 digest 验证镜像确实已经落到仓库。
               commands:
                 - set -euo pipefail
                 - |
@@ -308,10 +346,13 @@ Resources:
                     touch "$CODEBUILD_SRC_DIR/.codebuild-preview-image-ready"
                   fi
             post_build:
+              # post_build 编排云资源。先以 RoutingEnabled=false 创建数据库 Task，
+              # migration 成功后再启用 Service/Listener Rule，避免未就绪服务接流量。
               commands:
                 - set -euo pipefail
                 - |
                   run_database_task() {
+                    # 使用一次性 Fargate Task 创建/删除 PR schema，并严格检查退出码。
                     local operation="$1"
                     local task_definition="$2"
                     local command_json
@@ -339,6 +380,7 @@ Resources:
                   }
 
                   deploy_stack() {
+                    # 同一函数分两阶段部署：false/0 准备数据库，true/1 开放路由。
                     local routing_enabled="$1"
                     local desired_count="$2"
                     aws cloudformation deploy \
@@ -366,6 +408,7 @@ Resources:
                   }
 
                   stack_exists() {
+                    # 只把明确的“Stack 不存在”当作正常 false；权限/网络错误必须失败。
                     local output status
                     set +e
                     output="$(aws cloudformation describe-stacks --region "$AWS_DEFAULT_REGION" --stack-name "$STACK_NAME" --output text 2>&1)"
@@ -378,6 +421,8 @@ Resources:
                   }
 
                   if [[ "$PREVIEW_ACTION" == "deploy" ]]; then
+                    # 部署顺序：模板(无路由) → schema/migration → 模板(有路由)
+                    # → 等待 ECS 稳定 → 通过公网入口做健康和业务 smoke test。
                     [[ "${CODEBUILD_BUILD_SUCCEEDING:-0}" == "1" ]] || { echo "build failed; preview deployment blocked" >&2; exit 1; }
                     [[ -f "$CODEBUILD_SRC_DIR/.codebuild-preview-image-ready" ]] || { echo "verified preview image marker missing" >&2; exit 1; }
                     deploy_stack false 0
@@ -389,6 +434,8 @@ Resources:
                     curl --fail --silent --show-error --max-time 15 -H "X-Preview-Environment: ${PREVIEW_KEY}" "${PUBLIC_API_BASE_URL}/api/v1/github-users/preview-user/introduction" >/dev/null
                     echo "PR ${PR_NUMBER} preview ${PREVIEW_KEY} is ready"
                   else
+                    # 清理顺序：先关闭路由/Service → 删除 schema → 删除 Stack。
+                    # 这样能避免仍有请求或数据库连接时提前删除数据。
                     if ! stack_exists; then
                       echo "PR ${PR_NUMBER} preview stack is already absent"
                       exit 0
@@ -404,8 +451,11 @@ Resources:
                     echo "PR ${PR_NUMBER} preview resources and ${SCHEMA_NAME} were removed"
                   fi
               finally:
+                # finally 无论前面成功失败都会执行，清除仅用于本次构建的标记文件。
                 - rm -f "$CODEBUILD_SRC_DIR/.codebuild-preview-image-ready"
       Triggers:
+        # deploy 与 cleanup 使用两组 webhook filter；cleanup 不设 FILE_PATH，确保
+        # 即使 PR 没改 Go 文件，关闭事件也能回收之前可能存在的 preview。
         Webhook: true
         BuildType: BUILD
         FilterGroups:
@@ -434,6 +484,8 @@ Resources:
           - LOCAL_DOCKER_LAYER_CACHE
           - LOCAL_SOURCE_CACHE
       Environment:
+        # preview 也构建 Docker，故需要 privileged；通过人工批准和内嵌 BuildSpec
+        # 约束不可信 PR。并发上限 5 允许多个 PR 同时拥有隔离环境。
         Type: LINUX_CONTAINER
         Image: !Ref CodeBuildImage
         ComputeType: !Ref ComputeType
@@ -499,6 +551,8 @@ Resources:
           Value: cloudformation
 
   PreviewTtlCleanupProject:
+    # 定时兜底扫描器使用 NO_SOURCE 且 PrivilegedMode=false：它不运行仓库代码，
+    # 只按 Project/Environment/ExpiresAt tag 找过期 Stack，再启动已受控的 cleanup build。
     Type: AWS::CodeBuild::Project
     Properties:
       Name: !Sub ${ProjectName}-preview-ttl-cleanup
@@ -510,6 +564,8 @@ Resources:
       Source:
         Type: NO_SOURCE
         BuildSpec: |
+          # TTL BuildSpec 同样是内嵌 YAML。它只读取标签和启动 CodeBuild，
+          # 不直接删除 CloudFormation/ECS/数据库资源，复用正常 cleanup 安全门。
           version: 0.2
           env:
             shell: bash
@@ -536,6 +592,8 @@ Resources:
                   fi
 
                   for STACK_ARN in "${STACK_ARNS[@]}"; do
+                    # 即使资源带了正确 tag，仍再次校验 Stack 名和 PRNumber，
+                    # 防止错误标签导致扫描器操作非 preview Stack。
                     STACK_PATH="${STACK_ARN#*:stack/}"
                     STACK_NAME="${STACK_PATH%%/*}"
                     PREFIX="${PROJECT_NAME}-pr-"
@@ -569,6 +627,8 @@ Resources:
                     fi
 
                     echo "Starting guarded cleanup for expired ${STACK_NAME}"
+                    # 模拟 PR closed 事件启动同一个 preview Project，保证手动关闭
+                    # 和 TTL 过期走完全相同、已经验收过的删除流程。
                     BUILD_ID="$(aws codebuild start-build \
                       --region "$AWS_DEFAULT_REGION" \
                       --project-name "${PROJECT_NAME}-preview" \
@@ -646,6 +706,8 @@ Resources:
           Value: cloudformation
 
   PreviewTtlCleanupSchedule:
+    # EventBridge 定时规则只负责启动扫描 Project；RoleArn 是 EventBridge
+    # 调用 CodeBuild 时扮演的角色，信任关系在 go-iam.yaml 中受 SourceArn 限制。
     Type: AWS::Events::Rule
     Properties:
       Name: !Sub ${ProjectName}-preview-ttl-cleanup
@@ -666,9 +728,11 @@ Resources:
           Value: cloudformation
 
 Outputs:
+  # 输出 Project/Rule 标识便于在 Console、CLI 和运行手册中定位资源。
   ProductionBuildProjectName:
     Value: !Ref ProductionBuildProject
   ProductionBuildProjectArn:
+    # CodeBuild Project 的 !Ref 返回项目名；需要 ARN 时使用 !GetAtt .Arn。
     Value: !GetAtt ProductionBuildProject.Arn
   ProductionBuildLogGroupName:
     Value: !Ref ProductionBuildLogGroup

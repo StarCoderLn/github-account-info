@@ -12,7 +12,7 @@
 		"build": "turbo run build",
 		"check-types": "turbo run check-types",
 		"test": "turbo run test",
-		"check:infra": "node infra/scripts/validate-http-api-routes.mjs && node infra/scripts/validate-codebuild-production.mjs && node infra/scripts/validate-preview-boundary.mjs && node infra/scripts/validate-monitoring.mjs && node infra/scripts/validate-management-boundary.mjs",
+		"check:infra": "node infra/scripts/validate-http-api-routes.mjs && node infra/scripts/validate-codebuild-production.mjs && node infra/scripts/validate-preview-boundary.mjs && node infra/scripts/validate-monitoring.mjs && node infra/scripts/validate-management-boundary.mjs && node infra/scripts/validate-server-deployer-policy.mjs",
 		"dev:web": "turbo run dev --filter=web",
 		"dev:server": "turbo run dev --filter=server",
 		"dev:go": "turbo run dev --filter=go-api",

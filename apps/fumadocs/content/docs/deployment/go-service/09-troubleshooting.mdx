@@ -154,7 +154,19 @@ deploy false/0 → database create → exit 0 → deploy true/1
 
 **教训**：先看失败阶段。如果还没 clone repository，代码和构建配置不是第一嫌疑。
 
-## 14. 快速定位矩阵
+## 14. SAM 更新连续暴露三个 IAM 缺口
+
+**症状**：Node/SAM Stack 先后在 Log Group tagging、API Gateway Log Delivery、CloudWatch Alarm 阶段失败，并因回滚调用相同 API 卡成 `UPDATE_ROLLBACK_FAILED`。
+
+**证据链**：CloudFormation Events 依次明确指出 `logs:ListTagsForResource`、`logs:CreateLogDelivery`、`cloudwatch:PutMetricAlarm`；其他资源上的 `Resource update cancelled` 不是首因。GitHub Actions 的 Node.js deprecation warning 也不是退出码 1 的来源。
+
+**恢复顺序**：补齐最小部署权限 → `continue-update-rollback` → 等待 `UPDATE_ROLLBACK_COMPLETE` → 重跑 workflow → 验证 `UPDATE_COMPLETE` 与三个公开端点 200。不能在 rollback failed 状态直接反复 re-run。
+
+**长期修复**：`infra/server-deployer-policy.yaml` 用 customer managed policy 绑定既有 OIDC Role；确认等价策略生效后才删除 Console inline policy。CloudFormation 是控制面，不会因为附加了 `AWSCloudFormationFullAccess` 就自动获得 Logs/CloudWatch 底层权限。
+
+**教训**：新资源不仅要审查 runtime role，还要审查执行 CloudFormation 的 deployment principal；权限故障要从 Stack Events 最早的具体失败资源开始分层定位。
+
+## 15. 快速定位矩阵
 
 | 现象 | 最先检查 | 不要先做 |
 | --- | --- | --- |

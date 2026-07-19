@@ -1,3 +1,5 @@
+// config 的单元测试通过 t.Setenv 为每个测试建立隔离环境变量。
+// t.Setenv 会在测试结束后自动恢复原值，不污染其他测试或开发终端。
 package config
 
 import (
@@ -5,7 +7,9 @@ import (
 	"time"
 )
 
+// TestLoadDefaults 验证未配置的可选环境变量会使用安全默认值。
 func TestLoadDefaults(t *testing.T) {
+	// 空字符串模拟“未配置”，从而验证 Load 是否应用默认值。
 	t.Setenv("PORT", "")
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/app")
 	t.Setenv("DB_SCHEMA", "")
@@ -19,6 +23,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
+	// Go 测试通常直接写 if 比较；标准库不内置 assert API。
 	if cfg.Port != "8080" {
 		t.Fatalf("Port = %q, want 8080", cfg.Port)
 	}
@@ -36,6 +41,7 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadParsesPreviewOriginSuffix 同时覆盖合法后缀和通配符拒绝。
 func TestLoadParsesPreviewOriginSuffix(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/app")
 	t.Setenv("CORS_PREVIEW_ORIGIN_SUFFIX", ".github-account-info.pages.dev")
@@ -54,11 +60,14 @@ func TestLoadParsesPreviewOriginSuffix(t *testing.T) {
 	}
 }
 
+// TestLoadProductionRequiresAbsoluteRDSCABundle 验证 production TLS 前置条件。
 func TestLoadProductionRequiresAbsoluteRDSCABundle(t *testing.T) {
+	// 同一测试按缺失 → 相对路径 → 合法绝对路径逐步覆盖安全边界。
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/app")
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("RDS_CA_BUNDLE", "")
 
+	// 用 _ 丢弃 Config，只断言此输入必须返回 error。
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want missing RDS_CA_BUNDLE error")
 	}
@@ -78,6 +87,7 @@ func TestLoadProductionRequiresAbsoluteRDSCABundle(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsUnknownEnvironment 验证 APP_ENV 使用白名单。
 func TestLoadRejectsUnknownEnvironment(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/app")
 	t.Setenv("APP_ENV", "staging-ish")
@@ -87,6 +97,7 @@ func TestLoadRejectsUnknownEnvironment(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsInvalidPort 验证端口必须是合法整数。
 func TestLoadRejectsInvalidPort(t *testing.T) {
 	t.Setenv("PORT", "not-a-port")
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/app")
@@ -96,6 +107,7 @@ func TestLoadRejectsInvalidPort(t *testing.T) {
 	}
 }
 
+// TestLoadRequiresDatabaseURL 验证数据库连接串是必填配置。
 func TestLoadRequiresDatabaseURL(t *testing.T) {
 	t.Setenv("PORT", "8080")
 	t.Setenv("DATABASE_URL", "")
@@ -105,6 +117,7 @@ func TestLoadRequiresDatabaseURL(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsUnsafeDatabaseSchema 验证 schema 名不能携带 SQL 片段。
 func TestLoadRejectsUnsafeDatabaseSchema(t *testing.T) {
 	t.Setenv("PORT", "8080")
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/app")
@@ -115,7 +128,9 @@ func TestLoadRejectsUnsafeDatabaseSchema(t *testing.T) {
 	}
 }
 
+// TestLoadParsesCORSOrigins 验证逗号解析、去空白和去重。
 func TestLoadParsesCORSOrigins(t *testing.T) {
+	// 输入包含重复 origin，期望输出保持顺序并完成去重。
 	t.Setenv("PORT", "8080")
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/app")
 	t.Setenv("CORS_ORIGINS", "https://example.com, https://preview.example.com,https://example.com")

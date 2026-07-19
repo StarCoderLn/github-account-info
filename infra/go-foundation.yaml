@@ -1,8 +1,19 @@
+# Go 平台的“长期共享基础设施”Stack。它负责 ECR、ECS Cluster、Cloud Map、
+# 安全组和 Internal ALB；production 与每个 PR preview Stack 都复用这些资源。
+# 把生命周期较长的资源单独拆栈，可以避免发布业务版本时误删网络和镜像仓库。
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Shared runtime foundation for the github-account-info Go API: ECR, ECS
   cluster, Cloud Map private DNS, internal ALB, network boundaries, and logs.
   IAM roles live in the dependent go-iam.yaml stack.
+
+# 本文件内置函数阅读提示：
+# - !Ref ProjectName/VpcId 返回参数值；!Ref GoRepository 返回 ECR 仓库名，
+#   !Ref GoCluster 返回 Cluster 名。Resource 的 Ref 返回什么取决于资源类型。
+# - !Sub ${ProjectName}-internal 把参数插入字符串；${AWS::Region} 是伪参数。
+# - !GetAtt GoRepository.Arn 明确读取 ARN；Ref 通常只返回名称或 ID。
+# - !Join [",", !Ref PrivateSubnetIds] 把 List 拼成可 Export 的字符串。
+# - Outputs.Export.Name 定义跨 Stack 契约，使用方通过 Fn::ImportValue 读取。
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -29,6 +40,8 @@ Metadata:
         default: Private subnets in at least two Availability Zones
 
 Parameters:
+  # Parameters 中的 VPC、Subnet、Lambda/RDS Security Group 都是现有资源 ID；
+  # 本 Stack 引用它们但不拥有它们，因此删除本 Stack 不会删除原有 VPC/RDS。
   ProjectName:
     Type: String
     Default: github-account-info-go
@@ -74,11 +87,14 @@ Parameters:
       - 365
 
 Resources:
+  # ECR 镜像仓库。Retain 双保险确保删除/替换 Stack 时镜像仍保留；
+  # LifecyclePolicy 负责自动回收无 tag 和过旧 preview 镜像，控制存储成本。
   GoRepository:
     Type: AWS::ECR::Repository
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
+      # !Ref 引用 Parameter，所以结果就是部署时 ProjectName 的字符串值。
       RepositoryName: !Ref ProjectName
       ImageTagMutability: IMMUTABLE
       ImageScanningConfiguration:
@@ -134,6 +150,8 @@ Resources:
           Value: cloudformation
 
   GoEcsLogGroup:
+    # 所有 Go ECS Task 共用的 CloudWatch Logs 日志组。日志组被 Retain，
+    # RetentionInDays 则限定每条日志的保留时间，两者解决的是不同问题。
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
@@ -149,6 +167,8 @@ Resources:
           Value: cloudformation
 
   GoCluster:
+    # ECS Cluster 是 Fargate Service/Task 的逻辑容器，本身不创建 EC2 主机。
+    # Container Insights 打开后可获得更细的 CPU、内存和任务级监控指标。
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: !Ref ProjectName
@@ -171,6 +191,7 @@ Resources:
           Value: cloudformation
 
   CloudMapNamespace:
+    # PrivateDnsNamespace 会在指定 VPC 内建立私有 DNS 命名空间；公网无法解析。
     Type: AWS::ServiceDiscovery::PrivateDnsNamespace
     Properties:
       Name: !Ref CloudMapNamespaceName
@@ -185,6 +206,8 @@ Resources:
           Value: cloudformation
 
   GoCloudMapService:
+    # ECS Service 会把 Task 私有 IP 注册到该 Cloud Map Service。
+    # Node Lambda 通过稳定 DNS 名访问 Go，而不依赖会变化的 Task IP。
     Type: AWS::ServiceDiscovery::Service
     Properties:
       Name: !Ref CloudMapServiceName
@@ -205,8 +228,11 @@ Resources:
           Value: cloudformation
 
   GoTaskSecurityGroup:
+    # Go Task 的安全边界：本资源只声明出站规则；入站规则拆成独立资源，
+    # 可以清楚表达“谁能访问 Go”，也能减少安全组之间的循环依赖。
     Type: AWS::EC2::SecurityGroup
     Properties:
+      # !Sub 解析 ${ProjectName} 后生成描述文本，不会创建额外资源。
       GroupDescription: !Sub ${ProjectName} Fargate task boundary
       VpcId: !Ref VpcId
       SecurityGroupEgress:
@@ -231,6 +257,8 @@ Resources:
           Value: cloudformation
 
   InternalAlbSecurityGroup:
+    # Internal ALB 专用安全组。ALB 只接收 VPC Link 流量，并只向 Go Task
+    # 的 8080 端口转发，不允许任意公网来源直接访问。
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: !Sub ${ProjectName} internal ALB boundary
@@ -252,6 +280,7 @@ Resources:
           Value: cloudformation
 
   VpcLinkSecurityGroup:
+    # API Gateway VPC Link 使用的安全组；它只需向 Internal ALB 的 80 端口出站。
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: !Sub ${ProjectName} API Gateway VPC Link boundary
@@ -273,9 +302,12 @@ Resources:
           Value: cloudformation
 
   AlbIngressFromVpcLink:
+    # “来源安全组 → 目标安全组”的显式规则比 CIDR 更稳定：子网网段变化时
+    # 无需修改规则。这里只允许 VPC Link 到 ALB:80。
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       Description: API Gateway VPC Link to internal ALB
+      # !GetAtt 明确读取安全组的 GroupId 属性；属性名由资源文档定义。
       GroupId: !GetAtt InternalAlbSecurityGroup.GroupId
       IpProtocol: tcp
       FromPort: 80
@@ -283,6 +315,7 @@ Resources:
       SourceSecurityGroupId: !GetAtt VpcLinkSecurityGroup.GroupId
 
   GoIngressFromAlb:
+    # 允许 ALB 到 Go Task:8080，承载公网只读请求的私网后半段。
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       Description: Internal ALB forwarding and health checks
@@ -293,6 +326,7 @@ Resources:
       SourceSecurityGroupId: !GetAtt InternalAlbSecurityGroup.GroupId
 
   GoIngressFromLambda:
+    # 允许现有 Node Lambda 到 Go Task:8080，用于 /internal/v1/* 内部写接口。
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       Description: Node Lambda direct calls through Cloud Map DNS
@@ -303,6 +337,7 @@ Resources:
       SourceSecurityGroupId: !Ref LambdaSecurityGroupId
 
   RdsIngressFromGo:
+    # 在现有 RDS 安全组上增加入站规则，只允许 Go Task 访问 PostgreSQL 5432。
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       Description: Go ECS tasks to PostgreSQL
@@ -313,6 +348,8 @@ Resources:
       SourceSecurityGroupId: !GetAtt GoTaskSecurityGroup.GroupId
 
   InternalLoadBalancer:
+    # scheme=internal 表示 ALB 只分配私网地址；放在至少两个私有子网中
+    # 提供跨可用区能力。它不是公网入口，API Gateway 才是公网边界。
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       Name: !Sub ${ProjectName}-internal
@@ -342,6 +379,8 @@ Resources:
           Value: cloudformation
 
   InternalHttpListener:
+    # 共享 HTTP Listener 本身只有固定 404；production/preview Stack 通过
+    # ListenerRule 按路径增加转发规则，从而共享一个 ALB。
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       LoadBalancerArn: !Ref InternalLoadBalancer
@@ -356,6 +395,9 @@ Resources:
 
 
 Outputs:
+  # foundation 是跨 Stack 的“提供方”。带 Export.Name 的输出可被其他模板
+  # 通过 Fn::ImportValue 引用；只要仍被引用，CloudFormation 就会阻止删除
+  # 或修改该 Export，形成部署顺序保护。
   VpcId:
     Description: Existing VPC used by the platform.
     Value: !Ref VpcId
@@ -363,6 +405,8 @@ Outputs:
       Name: !Sub ${ProjectName}-VpcId
   PrivateSubnetIds:
     Description: Comma-delimited private subnet IDs.
+    # Export 需要简单值，所以先把 List 拼成 "subnet-a,subnet-b" 字符串；
+    # 使用方再用 !Split 还原成 List。
     Value: !Join [",", !Ref PrivateSubnetIds]
     Export:
       Name: !Sub ${ProjectName}-PrivateSubnetIds
