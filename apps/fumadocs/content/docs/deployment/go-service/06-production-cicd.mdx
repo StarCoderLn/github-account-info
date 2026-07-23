@@ -164,7 +164,7 @@ aws codebuild batch-get-builds \
 
 `deploy-go-production.sh` 在更新前读取旧 `ImageTag`。部署后：
 
-- CloudFormation/ECS 稳定失败：deployment circuit breaker 与 stack rollback 处理。
+- Canary Service 或稳定 Service 无法收敛：CloudFormation rollback 后，脚本恢复旧镜像、稳定流量 100% 与 Canary `DesiredCount=0`。
 - Service stable 但 health/ready smoke 失败：脚本重新部署旧 `ImageTag`并等待 stable。
 - 首次 runtime stack smoke 失败：删除失败的首次 stack，避免残留半可用 Service。
 

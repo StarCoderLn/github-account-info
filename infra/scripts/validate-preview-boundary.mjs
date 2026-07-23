@@ -37,6 +37,15 @@ assertIncludes(
 );
 assertIncludes(productionBuildRole, "cloudformation:GetTemplateSummary");
 assertExcludes(productionBuildRole, literal("stack/{ProjectName}-pr-"));
+assertIncludes(
+	productionBuildRole,
+	"service/${ProjectName}/${ProjectName}-production-canary",
+);
+assertIncludes(
+	productionBuildRole,
+	literal("task-definition/{ProjectName}-production*:*")
+);
+assertExcludes(productionBuildRole, "PassOnlyEcsInfrastructureRole");
 
 const previewBuildRole = resourceBlock(iam, "PreviewCodeBuildRole");
 assertIncludes(previewBuildRole, literal("project/{ProjectName}-preview"));
@@ -114,19 +123,31 @@ assertOrdered(previewProject, [
 const ttlCleanupProject = resourceBlock(codebuild, "PreviewTtlCleanupProject");
 assertIncludes(ttlCleanupProject, "Type: NO_SOURCE");
 assertIncludes(ttlCleanupProject, "aws resourcegroupstaggingapi get-resources");
-assertIncludes(ttlCleanupProject, '"Key=Project,Values=${PROJECT_NAME}"');
+assertIncludes(
+	ttlCleanupProject,
+	['"Key=Project,Values=', "$", '{PROJECT_NAME}"'].join(""),
+);
 assertIncludes(ttlCleanupProject, '"Key=Environment,Values=preview"');
 assertIncludes(ttlCleanupProject, "cloudformation:stack");
 assertIncludes(ttlCleanupProject, "ExpiresAt");
-assertIncludes(ttlCleanupProject, '"${PROJECT_NAME}-preview"');
-assertIncludes(ttlCleanupProject, 'name=CODEBUILD_WEBHOOK_EVENT,value=PULL_REQUEST_CLOSED,type=PLAINTEXT');
+assertIncludes(
+	ttlCleanupProject,
+	['"', "$", '{PROJECT_NAME}-preview"'].join(""),
+);
+assertIncludes(
+	ttlCleanupProject,
+	"name=CODEBUILD_WEBHOOK_EVENT,value=PULL_REQUEST_CLOSED,type=PLAINTEXT",
+);
 assertIncludes(ttlCleanupProject, '[[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,4}$ ]]');
 assertIncludes(ttlCleanupProject, "(( PR_NUMBER <= 49999 ))");
 assertIncludes(ttlCleanupProject, "CLEANUP_FINISHED=false");
 assertIncludes(ttlCleanupProject, "ConcurrentBuildLimit: 1");
 assertExcludes(ttlCleanupProject, "PrivilegedMode: true");
 
-const ttlCleanupSchedule = resourceBlock(codebuild, "PreviewTtlCleanupSchedule");
+const ttlCleanupSchedule = resourceBlock(
+	codebuild,
+	"PreviewTtlCleanupSchedule",
+);
 assertIncludes(ttlCleanupSchedule, "Type: AWS::Events::Rule");
 assertIncludes(ttlCleanupSchedule, "State: ENABLED");
 assertIncludes(ttlCleanupSchedule, "PreviewTtlCleanupProject.Arn");
@@ -146,7 +167,7 @@ if (!goBuilderImage?.includes("@sha256:")) {
 }
 
 console.log(
-	"Preview boundary valid: four isolated roles, approved PR webhook, pr-only stacks, separate secret, header routing, guarded schema cleanup, scheduled TTL fallback",
+	"Preview boundary valid: isolated runtime, deployment, and canary roles; approved PR webhook; pr-only stacks; separate secret; guarded cleanup",
 );
 
 function read(relativePath) {

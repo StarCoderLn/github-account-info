@@ -7,6 +7,10 @@ import {
 	type GoIntroductionClient,
 	GoIntroductionClientError,
 } from "../services/go-introduction";
+import {
+	type ProfileEventPublisher,
+	ProfileEventPublisherError,
+} from "../services/profile-events";
 import { createIntroductionRouter } from "./introduction-router";
 
 const generatedResponse: GenerateIntroductionResponse = {
@@ -52,6 +56,51 @@ test("generate forwards the validated username and regeneration flag", async () 
 		regenerate: true,
 	});
 	assert.equal(result.generated, true);
+});
+
+test("generate publishes the credential-free business event before returning", async () => {
+	let publishedResponse: GenerateIntroductionResponse | undefined;
+	const caller = createCaller(
+		{
+			async generate() {
+				return generatedResponse;
+			},
+		},
+		true,
+		{
+			async publishIntroductionReady(response) {
+				publishedResponse = response;
+			},
+		},
+	);
+
+	await caller.generate({ githubUsername: "octocat", regenerate: false });
+
+	assert.deepEqual(publishedResponse, generatedResponse);
+});
+
+test("generate asks the caller to retry when SNS publication fails", async () => {
+	const caller = createCaller(
+		{
+			async generate() {
+				return generatedResponse;
+			},
+		},
+		true,
+		{
+			async publishIntroductionReady() {
+				throw new ProfileEventPublisherError();
+			},
+		},
+	);
+
+	await assert.rejects(
+		caller.generate({ githubUsername: "octocat", regenerate: false }),
+		(error: unknown) =>
+			hasTrpcCode(error, "SERVICE_UNAVAILABLE") &&
+			error instanceof Error &&
+			error.message === "个人介绍已生成，但业务事件暂时无法发布，请重试",
+	);
 });
 
 for (const [kind, expectedCode] of [
@@ -118,8 +167,9 @@ test("generate is forbidden when the management API is disabled", async () => {
 function createCaller(
 	client: GoIntroductionClient,
 	managementApiEnabled = true,
+	profileEventPublisher?: ProfileEventPublisher,
 ) {
-	return createIntroductionRouter(client).createCaller({
+	return createIntroductionRouter(client, profileEventPublisher).createCaller({
 		auth: null,
 		session: null,
 		db: null,

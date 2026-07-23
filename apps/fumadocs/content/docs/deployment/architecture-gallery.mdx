@@ -6,13 +6,21 @@ icon: Images
 
 这里集中收录项目部署文档中的全部架构图。阅读时先看“当前架构”，历史图用于理解项目是如何逐步演进到现在的，不应直接作为当前环境的部署依据。
 
-## 当前完整部署架构
+## 核心部署与 PR Preview 架构
 
-**适合回答：整个系统目前有哪些入口、运行时、网络链路和 CI/CD 资源？**
+**适合回答：核心请求如何流转，生产 CI/CD 和 PR Preview 环境如何组织？**
 
-这张图包含 Cloudflare Pages、Node Lambda、Go ECS/Fargate、API Gateway、VPC Link、Internal ALB、Cloud Map，以及 production 和 Pull Request preview 两套部署链路，是目前信息最完整的全景图。
+这张图包含 Cloudflare Pages、Node Lambda、Go ECS/Fargate、API Gateway、VPC Link、Internal ALB、Cloud Map，以及 production 和 Pull Request preview 两套部署链路。Synthetics、异步事件和灰度发布的细节由下一张可靠性专题图补充。
 
-![当前完整部署架构：Node Lambda、Go ECS 服务与 CI/CD](./go-service/assets/deployment-architecture-v2.png)
+![核心部署与 PR Preview 架构：Node Lambda、Go ECS 服务与 CI/CD](./go-service/assets/deployment-architecture-v2.png)
+
+## 生产运行与可靠性架构
+
+**适合回答：生产请求如何流转，异步事件如何验证，以及 Node 和 Go 服务如何灰度发布与监控？**
+
+这张图聚焦生产运行时、Synthetics 主动巡检、个人介绍发布验证、DLQ 与告警，以及 Node Lambda 和 Go ECS 的灰度发布。它不展开 Pull Request preview、独立 preview schema 和 IAM Roles；需要这些资源时请查看上面的完整部署架构。
+
+![生产运行与可靠性架构：主动巡检、异步事件、灰度发布与监控](./operations-reliability/assets/deployment-architecture-v3.png)
 
 ## 当前 Go 个人主页平台
 
@@ -52,9 +60,10 @@ icon: Images
 
 | 想了解的问题 | 推荐查看 |
 | --- | --- |
-| 当前项目的完整部署形态 | 当前完整部署架构 |
+| 当前项目的完整部署形态 | 核心部署与 PR Preview 架构 + 生产运行与可靠性架构 |
+| 核心运行、生产 CI/CD 与 PR Preview | 核心部署与 PR Preview 架构 |
+| 生产请求、异步事件、灰度发布与监控 | 生产运行与可靠性架构 |
 | Go 请求、ECS 和内部网络链路 | 当前 Go 个人主页平台 |
 | 原 Node/Lambda 的 AWS 资源细节 | 历史 Node/Lambda 详细部署图 |
 | 原 Node/Lambda 的核心请求路径 | 历史 Node/Lambda 整体架构 |
 | 快速复习早期系统组成 | 早期架构速记图 |
-

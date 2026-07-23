@@ -1,0 +1,252 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Public API health and readiness checks using CloudWatch Synthetics.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: github-account-info
+    AllowedPattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+  CanaryName:
+    Type: String
+    Default: github-info-api
+    MinLength: 1
+    MaxLength: 21
+    AllowedPattern: "^[a-z0-9_-]+$"
+  TargetApiUrl:
+    Type: String
+    # 脚本会追加 /、/healthz、/readyz，禁止把 stage path 或尾斜杠混进 origin。
+    AllowedPattern: "^https://[^/?#]+$"
+    ConstraintDescription: Enter the HTTPS API origin without a path or trailing slash.
+  ScheduleExpression:
+    Type: String
+    Default: rate(15 minutes)
+  StartCanaryAfterCreation:
+    # 使用 String 而非 CloudFormation 不支持的 Boolean parameter，再由 Condition 转换。
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+  AlarmTopicArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:(aws|aws-us-gov|aws-cn):sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$"
+
+Conditions:
+  StartCanary: !Equals
+    - !Ref StartCanaryAfterCreation
+    - "true"
+  HasAlarmTopic: !Not
+    - !Equals
+      - !Ref AlarmTopicArn
+      - ""
+
+Resources:
+  CanaryArtifactsBucket:
+    # 每次运行的截图、HAR 和报告属于排障数据：禁止公网访问，30 天自动过期；
+    # Retain 让删除 Stack 时仍保留近期证据，由运维另行确认后再删除 bucket。
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireCanaryArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ApiCanaryRole:
+    # Synthetics 底层以 Lambda 执行，因此 trust principal 是 lambda.amazonaws.com。
+    # 权限只允许写本 Canary 的 artifact 前缀、遥测指标、日志和 X-Ray。
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WriteCanaryArtifactsAndTelemetry
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub ${CanaryArtifactsBucket.Arn}/api/*
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                Resource: !GetAtt CanaryArtifactsBucket.Arn
+              - Effect: Allow
+                Action:
+                  - s3:ListAllMyBuckets
+                # 此 API 不支持资源级 ARN；只用于 Synthetics 运行时定位 artifact bucket。
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: CloudWatchSynthetics
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/cwsyn-${CanaryName}-*:*
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ApiCanary:
+    # 一个 Canary 中拆成三个 step：既减少固定资源数量，也能在运行详情中准确
+    # 区分 Node 入口、Go 存活和数据库 readiness 哪一层失败。
+    Type: AWS::Synthetics::Canary
+    Properties:
+      Name: !Ref CanaryName
+      ArtifactS3Location: !Sub s3://${CanaryArtifactsBucket}/api
+      ExecutionRoleArn: !GetAtt ApiCanaryRole.Arn
+      RuntimeVersion: syn-nodejs-puppeteer-11.0
+      StartCanaryAfterCreation: !If [StartCanary, true, false]
+      SuccessRetentionPeriod: 7
+      FailureRetentionPeriod: 14
+      Schedule:
+        Expression: !Ref ScheduleExpression
+        DurationInSeconds: 0
+      RunConfig:
+        ActiveTracing: true
+        MemoryInMB: 960
+        TimeoutInSeconds: 60
+        EnvironmentVariables:
+          TARGET_API_URL: !Ref TargetApiUrl
+      Code:
+        Handler: index.handler
+        Script: |
+          const synthetics = require("Synthetics");
+
+          const checks = [
+            { name: "node-root", path: "/", expectedText: "OK" },
+            { name: "go-liveness", path: "/healthz", expectedStatus: "ok" },
+            { name: "go-readiness", path: "/readyz", expectedStatus: "ready" },
+          ];
+
+          function requestOptions(target, path) {
+            // TargetApiUrl 已在模板参数中限制为纯 HTTPS origin；这里统一复用
+            // hostname，避免某个 step 意外访问外部地址。
+            return {
+              hostname: target.hostname,
+              method: "GET",
+              path,
+              port: 443,
+              protocol: "https:",
+              headers: {
+                "User-Agent": "github-account-info-synthetics/1.0",
+              },
+            };
+          }
+
+          async function validateResponse(response, check) {
+            // 不能只检查 TCP/HTTP 可达：正文断言能发现错误路由、HTML 错误页，
+            // readiness 还会覆盖 Go 到数据库的依赖状态。
+            if (response.statusCode !== 200) {
+              throw new Error(`${check.name} returned ${response.statusCode}`);
+            }
+
+            const chunks = [];
+            for await (const chunk of response) chunks.push(chunk);
+            const body = Buffer.concat(chunks).toString("utf8");
+
+            if (check.expectedText && body.trim() !== check.expectedText) {
+              throw new Error(`${check.name} returned an unexpected body`);
+            }
+            if (check.expectedStatus) {
+              const payload = JSON.parse(body);
+              if (payload.status !== check.expectedStatus) {
+                throw new Error(`${check.name} returned an unexpected status`);
+              }
+            }
+          }
+
+          exports.handler = async () => {
+            const target = new URL(process.env.TARGET_API_URL);
+            for (const check of checks) {
+              // executeHttpStep 会为每个名称生成独立步骤、指标、HAR 和日志。
+              await synthetics.executeHttpStep(
+                check.name,
+                requestOptions(target, check.path),
+                (response) => validateResponse(response, check),
+              );
+            }
+          };
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ApiCanaryFailedAlarm:
+    # 五分钟窗口内任何一个 step 失败都会使 Failed 指标达到 1。
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-synthetics-api-failed
+      AlarmDescription: The public API Synthetics canary failed at least once.
+      Namespace: CloudWatchSynthetics
+      MetricName: Failed
+      Dimensions:
+        - Name: CanaryName
+          Value: !Ref ApiCanary
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      OKActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+Outputs:
+  CanaryName:
+    Value: !Ref ApiCanary
+  ArtifactBucketName:
+    Value: !Ref CanaryArtifactsBucket

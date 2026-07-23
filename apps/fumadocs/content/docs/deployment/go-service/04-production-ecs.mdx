@@ -1,6 +1,6 @@
 ---
 title: 4. 首次 Production ECS
-description: 推送首个不可变镜像，创建 Task Definition、Target Group、ECS Service 并逐层验收
+description: 推送不可变镜像，创建 Task Definition、双 Target Group 与 ECS Canary Service 并逐层验收
 icon: Server
 ---
 
@@ -63,9 +63,10 @@ aws cloudformation validate-template \
 重点阅读这些资源：
 
 - Task Definition：256 CPU、512 MiB、readonly root filesystem、Secret injection。
-- Target Group：`ip` target、8080、`/healthz`。
+- 主/备用 Target Group：均为 `ip` target、8080、`/healthz`。
 - Listener Rule：只匹配 `/api/v1/*`、`/healthz`、`/readyz`。
-- ECS Service：Fargate、无 public IP、两个私有子网、deployment circuit breaker。
+- 稳定 ECS Service：Fargate、无 public IP、注册 Cloud Map，通过 Rolling 保持内部链路连续。
+- Canary ECS Service：不注册 Cloud Map，平时缩容为 0；发布时运行 1 个 Task，经备用 Target Group 承接 10% 公网流量并观察 5 分钟。
 - Service Registry：注册 production Task 到 Cloud Map。
 
 ## 4. 创建 production change set

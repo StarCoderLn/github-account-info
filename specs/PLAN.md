@@ -19,6 +19,14 @@
 
 Feature 4 采用渐进迁移：Node Lambda 保留 GitHub PAT 与账号管理写入；Go 使用已经保存的 GitHub username/账号资料，通过 `template-v1` 规则生成并保存个人介绍，同时提供公开读取。详细需求、设计与任务见 `specs/4.go-profile-platform/`。
 
+## 运行稳定性扩展（2026-07-22）
+
+| 序号 | feature | 说明 | 依赖 | 状态 |
+| --- | --- | --- | --- | --- |
+| 5 | operational-resilience | Synthetics 巡检、SNS/SQS/DLQ 事件链路、Node 与 Go 灰度发布 | 4 | ✅ 已完成并通过云端验收 |
+
+Feature 5 直接复用现有业务链路，不创建独立演示项目。详细需求、设计、完成项与云端验收步骤见 `specs/5.operational-resilience/`。
+
 **执行顺序**：1、2 并行完成 → 3 依赖 1/2 接口，已完成。
 
 ## 关键决策

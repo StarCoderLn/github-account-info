@@ -107,7 +107,7 @@ aws cloudformation wait stack-rollback-complete \
 
 ## Production 回滚
 
-production image tag 不可变，ECS deployment circuit breaker 会自动回滚启动失败的 revision。若 smoke test 失败，CodeBuild 脚本也会恢复上一 image tag。人工处理时遵循：
+production image tag 不可变。独立 Canary Service 会先接收 10% 公网流量并观察 5 分钟；稳定 Service 的 Cloud Map 链路保持 Rolling。若部署或 smoke test 失败，发布脚本恢复上一 image tag、稳定流量 100% 并把 Canary 缩容为 0。人工处理时遵循：
 
 1. 在 CodeBuild/ECS Console 记录失败 build ID、新旧 image tag 和 deployment event。
 2. 确认上一 revision 曾稳定运行，不重新标记或覆盖 ECR tag。
