@@ -62,6 +62,12 @@ Parameters:
     Default: http://go-api.github-account-info.local:8080
     AllowedPattern: "^http://[a-z0-9.-]+:[0-9]+$"
     ConstraintDescription: Enter the private Cloud Map base URL without a path.
+  ProfileEventsTopicArn:
+    Type: String
+    Default: ""
+    # 留空时既不注入有效 publisher，也不创建 IAM policy，便于本地/分阶段部署。
+    AllowedPattern: "^$|^arn:(aws|aws-us-gov|aws-cn):sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$"
+    Description: Optional SNS topic for credential-free introduction.ready events.
   LambdaSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
     Default: subnet-0271ef8002e00346a
@@ -85,6 +91,10 @@ Conditions:
     - !Equals
       - !Ref AlarmTopicArn
       - ""
+  HasProfileEventsTopic: !Not
+    - !Equals
+      - !Ref ProfileEventsTopicArn
+      - ""
 
 Resources:
   # Node/tRPC Lambda。AWS::Serverless::Function 是 SAM 简写，SAM 会为它
@@ -103,10 +113,28 @@ Resources:
           DATABASE_URL: !Ref DatabaseUrl
           CORS_ORIGIN: !Ref CorsOrigin
           GO_API_INTERNAL_URL: !Ref GoApiInternalUrl
+          PROFILE_EVENTS_TOPIC_ARN: !Ref ProfileEventsTopicArn
           # Preserve the existing unauthenticated production management flow.
           # This is an explicit compatibility choice; CORS is not authentication.
           MANAGEMENT_API_ENABLED: "true"
           NODE_ENV: production
+
+  ApiProfileEventsPublishPolicy:
+    # 独立 inline policy 绑定 SAM 自动生成的执行角色，仅允许发布到参数指定 Topic。
+    # 不授予 sns:*，也不允许列出或读取账号内其他 Topic。
+    Type: AWS::IAM::Policy
+    Condition: HasProfileEventsTopic
+    Properties:
+      PolicyName: publish-profile-events
+      Roles:
+        - !Ref ApiFunctionRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublishOnlyConfiguredProfileEventsTopic
+            Effect: Allow
+            Action: sns:Publish
+            Resource: !Ref ProfileEventsTopicArn
 
   # 保留旧版隐式 SAM HttpApi 生成的逻辑 ID，使 CloudFormation 能原地更新
   # 已有 API，而不是悄悄创建第二个公网入口。部署前仍要在 Change Set 中
@@ -136,10 +164,12 @@ Resources:
                 httpMethod: POST
                 # !Sub 会把 ${变量} 替换成参数、伪参数或资源属性；
                 # AWS::Partition 让 ARN 同时兼容 aws/aws-cn/aws-us-gov。
-                # ${ApiFunction.Arn} 是 !Sub 内的资源属性语法，效果等价于
-                # !GetAtt ApiFunction.Arn，但适合直接嵌入较长 ARN 字符串。
-                uri: !Sub >-
-                  arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiFunction.Arn}/invocations
+                # API Gateway 必须调用 live Alias，部署脚本设置的 10%/90% 权重
+                # 才会作用到真实 API 流量；直接调用函数 ARN会绕过灰度。
+                uri: !Sub
+                  - >-
+                    arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiAliasArn}/invocations
+                  - ApiAliasArn: !Sub ${ApiFunction.Arn}:live
                 payloadFormatVersion: "2.0"
                 timeoutInMillis: 30000
           "/trpc/{proxy+}":
@@ -152,8 +182,10 @@ Resources:
               x-amazon-apigateway-integration:
                 type: aws_proxy
                 httpMethod: POST
-                uri: !Sub >-
-                  arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiFunction.Arn}/invocations
+                uri: !Sub
+                  - >-
+                    arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiAliasArn}/invocations
+                  - ApiAliasArn: !Sub ${ApiFunction.Arn}:live
                 payloadFormatVersion: "2.0"
                 timeoutInMillis: 30000
             options:
@@ -165,8 +197,10 @@ Resources:
               x-amazon-apigateway-integration:
                 type: aws_proxy
                 httpMethod: POST
-                uri: !Sub >-
-                  arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiFunction.Arn}/invocations
+                uri: !Sub
+                  - >-
+                    arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiAliasArn}/invocations
+                  - ApiAliasArn: !Sub ${ApiFunction.Arn}:live
                 payloadFormatVersion: "2.0"
                 timeoutInMillis: 30000
           "/api/v1/{proxy+}":
@@ -269,7 +303,7 @@ Resources:
       Action: lambda:InvokeFunction
       # 对 SAM Function 使用 !Ref，返回底层 Lambda 的函数名，符合
       # AWS::Lambda::Permission.FunctionName 可接受的输入类型。
-      FunctionName: !Ref ApiFunction
+      FunctionName: !Sub ${ApiFunction.Arn}:live
       # AWS::AccountId 是当前部署账户的 12 位 ID；无需手工传参。
       Principal: apigateway.amazonaws.com
       SourceAccount: !Ref AWS::AccountId
@@ -338,6 +372,9 @@ Outputs:
     Description: API Gateway default-stage endpoint URL.
     # !Sub 同时解析 Resource(!Ref 语义)和 Region/URLSuffix 伪参数，最终得到 URL。
     Value: !Sub https://${ServerlessHttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}
+  ApiLiveAliasArn:
+    Description: Lambda alias used by API Gateway and native weighted routing.
+    Value: !Sub ${ApiFunction.Arn}:live
   GoApiVpcLinkId:
     Description: VPC Link used only for public Go routes.
     Value: !Ref GoApiVpcLink

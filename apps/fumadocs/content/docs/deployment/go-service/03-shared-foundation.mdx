@@ -1,6 +1,6 @@
 ---
 title: 3. Shared Foundation 与 IAM
-description: 创建 ECR、ECS Cluster、Cloud Map、Internal ALB、Security Groups 和四角色权限边界
+description: 创建 ECR、ECS Cluster、Cloud Map、Internal ALB、Security Groups 和五角色权限边界
 icon: Blocks
 ---
 
@@ -174,7 +174,7 @@ aws cloudformation create-change-set \
   --template-body file://infra/go-iam.yaml \
   --parameters file://infra/parameters/go-iam.local.json \
   --capabilities CAPABILITY_NAMED_IAM \
-  --description 'Four isolated Go platform IAM roles; review before execution'
+  --description 'Go platform runtime, deployment, and canary IAM roles; review before execution'
 ```
 
 预期恰好四个角色：
@@ -185,6 +185,7 @@ aws cloudformation create-change-set \
 | Preview Execution | ECR pull、Logs、preview Secret | production Secret |
 | Production CodeBuild | production stack、ECR push、Pass production role | PR stack、preview role |
 | Preview CodeBuild | `pr-*` stack、ECR push、Pass preview role | production stack/role/Secret |
+| ECS Infrastructure | 调整 production 双 Target Group 的 Canary 流量 | 应用运行时、数据库 Secret |
 
 查看和执行方式与 foundation 相同，但执行时保留 stack 名 `github-account-info-go-iam`。
 

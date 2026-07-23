@@ -43,6 +43,7 @@ for (const forbidden of [
 	"logs:DeleteLogGroup",
 	"logs:GetLogEvents",
 	"logs:FilterLogEvents",
+	"codedeploy:",
 ]) {
 	assertExcludes(template, forbidden);
 }

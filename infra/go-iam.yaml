@@ -344,7 +344,7 @@ Resources:
               - Sid: ReadProjectTaskDefinitionTags
                 Effect: Allow
                 Action: ecs:ListTagsForResource
-                Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${ProjectName}-production:*
+                Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${ProjectName}-production*:*
               - Sid: ManageProductionService
                 Effect: Allow
                 Action:
@@ -354,7 +354,9 @@ Resources:
                   - ecs:TagResource
                   - ecs:UntagResource
                   - ecs:UpdateService
-                Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${ProjectName}/${ProjectName}-production
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${ProjectName}/${ProjectName}-production
+                  - !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${ProjectName}/${ProjectName}-production-canary
               - Sid: ObserveProjectTasks
                 Effect: Allow
                 Action:
@@ -409,7 +411,7 @@ Resources:
                   - elasticloadbalancing:ModifyTargetGroupAttributes
                   - elasticloadbalancing:RegisterTargets
                   - elasticloadbalancing:RemoveTags
-                Resource: !Sub arn:${AWS::Partition}:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/${ProjectName}-prod/*
+                Resource: !Sub arn:${AWS::Partition}:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/${ProjectName}-prod*/*
               - Sid: ManageRulesOnProjectListener
                 Effect: Allow
                 Action:

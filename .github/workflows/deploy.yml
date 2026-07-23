@@ -10,6 +10,7 @@ on:
       - "packages/api/**"
       - "packages/db/**"
       - "packages/env/**"
+      - "packages/events/**"
   workflow_dispatch:
 
 permissions:
@@ -50,14 +51,14 @@ jobs:
       - uses: aws-actions/setup-sam@v3
 
       - name: Deploy Lambda
+        env:
+          # 数据库连接串继续来自 Secret；Topic ARN 不是凭证，使用 repository Variable。
+          # 两者通过 env 传给脚本，避免值出现在仓库或重复展开到命令文本中。
+          DATABASE_URL: ${{ secrets.AWS_DATABASE_URL }}
+          PROFILE_EVENTS_TOPIC_ARN: ${{ vars.PROFILE_EVENTS_TOPIC_ARN }}
         run: |
-          # sam deploy 会读取 apps/server/samconfig.toml 的 Stack/Region 等默认值，
-          # 再把 template.yaml 转换并交给 CloudFormation 创建 Change Set。
-          # --no-confirm-changeset 适合 CI 自动执行；--no-fail-on-empty-changeset
-          # 让“模板没有变化”正常结束，而不是把流水线标记为失败。
-          # DatabaseUrl 只从 GitHub Actions Secret 注入，不写进仓库文件。
-          sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
-            --parameter-overrides \
-              DatabaseUrl="${{ secrets.AWS_DATABASE_URL }}" \
-              CorsOrigin="https://github-account-info.pages.dev"
+          # CloudFormation 只更新 $LATEST；公开 API 始终调用 live alias。
+          # 脚本发布不可变版本并完成 90/10、5 分钟观察和 100% 晋级。
+          chmod +x deploy-canary.sh
+          ./deploy-canary.sh
         working-directory: apps/server

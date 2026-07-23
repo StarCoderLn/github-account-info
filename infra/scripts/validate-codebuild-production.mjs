@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 
+// 同时约束 webhook、buildspec、镜像可追溯性和发布脚本四阶段。这里只做静态
+// 边界检查，真实的 Service/Target 健康状态仍由部署脚本和 AWS waiter 验证。
 const buildspec = readFileSync(
 	new URL("../buildspec/go-production.yml", import.meta.url),
 	"utf8",
@@ -44,7 +46,21 @@ if (!goBuilderImage?.includes("@sha256:")) {
 assertIncludes(deployScript, "aws ecs wait services-stable");
 assertIncludes(deployScript, "smoke_test /healthz");
 assertIncludes(deployScript, "smoke_test /readyz");
-assertIncludes(deployScript, 'deploy_image "$previous_image_tag"');
+assertIncludes(
+	deployScript,
+	'deploy_release "$previous_image_tag" "$IMAGE_TAG" 90 10 1',
+);
+assertIncludes(
+	deployScript,
+	'deploy_release "$previous_image_tag" "$IMAGE_TAG" 0 100 1',
+);
+assertIncludes(
+	deployScript,
+	'deploy_release "$IMAGE_TAG" "$IMAGE_TAG" 100 0 0',
+);
+assertIncludes(deployScript, "wait_for_canary_target");
+assertIncludes(deployScript, "observe_canary");
+assertIncludes(deployScript, "restore_previous_release");
 assertIncludes(
 	deployScript,
 	"unable to determine whether the production stack exists",

@@ -4,8 +4,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Least-privilege supplemental policy for the existing GitHub Actions role that
-  deploys the Node/SAM edge stack. It manages only the API access log delivery,
-  the retained access log group, and the HTTP API 5xx alarm.
+  deploys the Node/SAM edge stack. It manages API observability resources.
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -91,7 +90,6 @@ Resources:
             Effect: Allow
             Action: cloudwatch:DescribeAlarms
             Resource: "*"
-
 Outputs:
   ManagedPolicyArn:
     Description: Customer managed policy attached to the existing deployer role.

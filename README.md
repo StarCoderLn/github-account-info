@@ -11,6 +11,8 @@
 - **个人介绍生成**：Go 根据已经保存的 GitHub username 与账号资料生成稳定的中文介绍，第一版不调用 AI
 - **公开个人主页**：通过 `/u/$username` 无登录读取已发布的个人介绍，不需要 GitHub PAT
 - **渐进式 Go 迁移**：production 保留现有 Node Lambda/tRPC 账号管理链路；个人介绍生成经 Cloud Map 调用 Go，公开读取经 VPC Link 进入 Go
+- **异步发布验证**：个人介绍生成后经 SNS、SQS 触发 Lambda 回读公开 API，持续失败的发布验证进入 DLQ
+- **稳定性验证**：CloudWatch Synthetics 巡检公开入口；Node Lambda 与 Go 公网 API 均支持 10% 灰度发布
 - **端到端类型安全**：tRPC + Drizzle + zod 全链路类型推导，无需手写接口类型
 
 ## 技术栈
@@ -30,9 +32,11 @@ github-account-info/
 ├── apps/
 │   ├── web/         # React + TanStack Router 前端
 │   ├── server/      # Node Hono + tRPC 服务端入口
-│   └── go-api/      # 个人介绍生成与公开读取 REST API
+│   ├── go-api/      # 个人介绍生成与公开读取 REST API
+│   └── profile-event-consumer/ # SQS 个人介绍事件消费者
 ├── packages/
 │   ├── api/         # tRPC procedure 定义（端到端类型源）
+│   ├── events/      # SNS/SQS 共享事件契约
 │   ├── db/          # Drizzle schema 与 migration
 │   ├── preview-environment/ # Cloudflare 与 CodeBuild 共享的 PR preview key
 │   ├── ui/          # 共享 shadcn/ui 组件

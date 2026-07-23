@@ -96,7 +96,7 @@ Internal ALB 不能从公网直接 curl。使用 API Gateway，或在 VPC 内受
 三层保护：
 
 1. 测试失败：没有 image-ready marker，不调用 deploy。
-2. 新 Task 无法稳定：ECS deployment circuit breaker + CloudFormation rollback。
+2. Canary Task 或稳定 Service 新 Task 无法收敛：CloudFormation rollback，发布脚本恢复 100/0 权重并关闭 Canary Task。
 3. Service stable 但 smoke test失败：部署脚本恢复上一 `ImageTag`。
 
 人工恢复时不要覆盖 ECR tag。先记录失败 build、新旧 SHA、Task revision 和 events，然后让 CloudFormation重新引用曾经稳定的不可变 tag。

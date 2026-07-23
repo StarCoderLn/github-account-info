@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 
+// 通过解析模板中的 OpenAPI 路由做静态回归检查：既防止重新出现 $default /
+// /internal 暴露，也确保 Node integrations 始终经过 live alias 承接灰度权重。
 const templateUrl = new URL("../../apps/server/template.yaml", import.meta.url);
 const template = readFileSync(templateUrl, "utf8");
 const foundationTemplate = readFileSync(
@@ -18,6 +20,7 @@ const expectedRouteKeys = [
 ].sort();
 
 const api = resourceBlock("ServerlessHttpApi");
+const apiFunction = resourceBlock("ApiFunction");
 const actualRouteKeys = openApiRouteKeys(api).sort();
 
 assertEqual(
@@ -37,6 +40,10 @@ assertExcludes(api, "httpMethod: ANY");
 
 assertIncludes(api, "type: aws_proxy");
 assertIncludes(api, 'payloadFormatVersion: "2.0"');
+assertExcludes(apiFunction, "AutoPublishAlias:");
+assertExcludes(apiFunction, "DeploymentPreference:");
+assertOccurrenceCount(api, "ApiAliasArn: !Sub ${ApiFunction.Arn}:live", 3);
+assertIncludes(template, "FunctionName: !Sub ${ApiFunction.Arn}:live");
 assertExcludes(api, "ProtocolType:");
 assertExcludes(template, "Type: AWS::ApiGatewayV2::Route");
 assertMatches(
@@ -111,6 +118,15 @@ function assertEqual(actual, expected, message) {
 	if (JSON.stringify(actual) !== JSON.stringify(expected)) {
 		throw new Error(
 			`${message}\nexpected: ${JSON.stringify(expected)}\nactual: ${JSON.stringify(actual)}`,
+		);
+	}
+}
+
+function assertOccurrenceCount(value, expected, count) {
+	const actual = value.split(expected).length - 1;
+	if (actual !== count) {
+		throw new Error(
+			`expected ${JSON.stringify(expected)} ${count} time(s), found ${actual}`,
 		);
 	}
 }

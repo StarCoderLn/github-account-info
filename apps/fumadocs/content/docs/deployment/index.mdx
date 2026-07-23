@@ -20,6 +20,12 @@ flowchart LR
   Lambda --> RDS[(RDS PostgreSQL)]
   Go --> RDS
   Lambda -->|经 NAT| GitHub[GitHub REST API]
+  Lambda -->|introduction.ready| SNS[SNS]
+  SNS --> SQS[SQS]
+  SQS --> Consumer[Publication verifier Lambda]
+  Consumer -->|回读公开介绍| APIGW
+  SQS -.五次失败.-> DLQ[DLQ]
+  Synthetics[CloudWatch Synthetics] --> APIGW
 ```
 
 ![Go 个人主页平台部署架构](./go-service/assets/go-profile-platform.png)
@@ -62,9 +68,12 @@ Internal ALB 没有公网地址。API Gateway 是公开入口，VPC Link 负责�
 | Go production | master 指定路径变更 | AWS CodeBuild | ECR SHA 镜像 + ECS revision |
 | Go PR preview | PR 生命周期事件 | AWS CodeBuild | 独立 schema、Target Group、ECS Service 与 ALB rule |
 
+Node production 由 Lambda `live` alias 原生权重执行 10% 流量、观察 5 分钟、再切到 100%；Go production 的公网 ALB 链路由独立 Canary Service 与 Target Group 权重执行相同策略。只有稳定 Go Service 注册 Cloud Map，因此 Node → Go 内部调用不参与公网灰度。
+
 ## 从哪里开始
 
 - 想直观看完整系统或对比历史版本：打开 [架构图总览](/docs/deployment/architecture-gallery)，现有架构图都集中在那里。
+- 想部署巡检、消息队列和灰度能力：读 [稳定性与异步事件链路](/docs/deployment/operations-reliability)。
 - 第一次了解项目：先读本页，再读 [Go 服务：目标与路线](/docs/deployment/go-service)。
 - 重建 Node 部署：读 [Node Lambda 部署实录](/docs/deployment/node-lambda)。
 - 操作 Go production：按 Go 教程左侧顺序阅读，不要直接跳到 CodeBuild。

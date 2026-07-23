@@ -190,15 +190,16 @@ git push master
 **链路 B：后端自动部署（GitHub Actions + SAM）**
 
 ```
-git push master（且改动命中 paths 过滤: apps/server/** 或 packages/{api,db,env}/**）
+git push master（且改动命中 paths 过滤: apps/server/** 或 packages/{api,db,env,events}/**）
   → actions/checkout + pnpm install
   → node build.mjs
       esbuild 把 src/lambda.ts 连同所有 workspace 依赖打成单文件 dist/lambda.mjs
       （format: esm + createRequire banner，解决 CJS 依赖在 ESM bundle 里的兼容）
   → configure-aws-credentials 用 OIDC 换取短期凭证（扮演 github-actions-deployer 角色）
-  → sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
-      --parameter-overrides DatabaseUrl=${{ secrets.AWS_DATABASE_URL }} CorsOrigin=https://...
-  → CloudFormation 对比 changeset → 更新 Lambda 代码/配置
+  → deploy-canary.sh 调用 sam deploy 更新 Lambda `$LATEST` 与配置
+  → 发布不可变 Lambda version
+  → live alias：旧版本 90% / 新版本 10%，连续观察 5 分钟
+  → 通过后 live 指向新版本 100%；失败则恢复旧版本
 ```
 
 **链路 C：本地手动部署后端（应急/首次）**
@@ -541,6 +542,7 @@ on:
       - "packages/api/**"
       - "packages/db/**"
       - "packages/env/**"
+      - "packages/events/**"
   workflow_dispatch:          # 允许在 GitHub 页面手动触发（救急时不用推空提交）
 
 permissions:
@@ -577,22 +579,21 @@ jobs:
 
       - uses: aws-actions/setup-sam@v3      # ⑦ 装 SAM CLI
 
-      - name: Deploy Lambda                 # ⑧ 部署；参数覆盖 samconfig.toml 的默认值
+      - name: Deploy Lambda                 # ⑧ 更新 $LATEST，再通过 live alias 灰度
+        env:
+          DATABASE_URL: ${{ secrets.AWS_DATABASE_URL }}
+          PROFILE_EVENTS_TOPIC_ARN: ${{ vars.PROFILE_EVENTS_TOPIC_ARN }}
         run: |
-          sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
-            --parameter-overrides \
-              DatabaseUrl="${{ secrets.AWS_DATABASE_URL }}" \
-              CorsOrigin="https://github-account-info.pages.dev"
+          chmod +x deploy-canary.sh
+          ./deploy-canary.sh
         working-directory: apps/server
-        # --no-confirm-changeset：CI 无人值守，跳过人工确认（本地 samconfig 里是 true）
-        # --no-fail-on-empty-changeset：代码无变化时不报错退出（否则重跑会红）
-        # DatabaseUrl 从 GitHub Secrets 注入，日志中自动打码
-        # CorsOrigin 是公开的前端域名，直接明文写在 workflow 里
+        # 脚本内部执行 sam deploy、publish-version、90/10 权重与五分钟观察
+        # DatabaseUrl 从 GitHub Secrets 注入，不写进仓库
 ```
 
 **OIDC 原理**：GitHub 为每次 workflow 运行签发一个短期 OIDC token，AWS IAM 侧配置了信任 GitHub 的身份提供商（IdP），并限定只有本仓库的 workflow 才能扮演 `github-actions-deployer` 这个角色。**没有任何长期密钥存在于 GitHub**，凭证随任务结束自动失效。
 
-> SAM 相关配置一共三份，各管一段：`template.yaml`（声明云上资源，见 [2.3 步骤 4](#步骤-4写-sam-templateyaml)）→ `samconfig.toml`（sam deploy 的默认参数）→ `deploy.yml`（CI 里何时、以什么身份、用什么参数执行 sam deploy）。
+> Node 部署配置分为四份：`template.yaml` 声明云上资源，`samconfig.toml` 保存 SAM 默认参数，`deploy-canary.sh` 编排 Lambda alias 灰度，`deploy.yml` 决定 CI 触发条件与 OIDC 身份。
 
 > GitHub Actions 的 Node.js 弃用警告说的是 Action 自身的内部运行时，不是 `setup-node` 安装给项目使用的 Node 版本。当前 workflow 使用支持 Node.js 24 的 `checkout@v7`、`setup-node@v7`、`configure-aws-credentials@v6`、`setup-sam@v3` 和 `pnpm/action-setup@v6`；项目构建仍固定使用 Node 22。
 

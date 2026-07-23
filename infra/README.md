@@ -7,17 +7,19 @@
 ## 文件边界
 
 - `go-foundation.yaml`：共享且低频变化的 ECR、ECS Cluster、Cloud Map、Internal ALB、Security Groups 和 CloudWatch Log Group。
-- `go-iam.yaml`：production/preview 各自的 ECS Execution Role 与 CodeBuild Role，共四个隔离 IAM Role；依赖 foundation exports。
-- `go-production.yaml`：production Task Definition、Target Group、ALB path rule 和 ECS Service；只接受不可变的 `prod-<commit-sha>` image tag。
+- `go-iam.yaml`：production/preview 的 ECS Execution Role 与 CodeBuild Role，共四个隔离 IAM Role；依赖 foundation exports。
+- `go-production.yaml`：稳定/Canary Task Definition、双 ECS Service、主/备用 Target Group 与加权 ALB path rule；只接受不可变的 `prod-<commit-sha>` image tag。
 - `go-preview.yaml`：承载单个 PR 的 runtime/database Task Definition、Fargate Spot Service、Target Group 和 header Listener Rule。
 - `codebuild.yaml`：production 与 preview 两个权限隔离的 CodeBuild project；PR buildspec 内联且需要可信成员审批。
-- `server-deployer-policy.yaml`：绑定现有 `github-actions-deployer` 的 customer managed policy；只管理 Node/SAM 公网入口的 access log 与 5xx alarm，不创建或替换 OIDC Role。
+- `profile-events.yaml`：个人介绍完成事件的 SNS → SSE-SQS queue → publication verifier Lambda → DLQ 链路及队列告警；SSE-SQS 仅负责队列静态加密，部署时传入公开 API origin。
+- `synthetics.yaml`：公开 API 的 CloudWatch Synthetics 巡检、产物 bucket 与失败告警。
+- `server-deployer-policy.yaml`：绑定现有 `github-actions-deployer` 的 customer managed policy；只管理 Node/SAM 的 observability 资源，不创建或替换 OIDC Role。
 - `buildspec/go-production.yml`：格式、依赖、静态检查、测试、镜像构建/推送、production 部署与 smoke-test 回滚。
 - `RUNBOOK.md`：CloudWatch 告警、API/ALB/ECS/Cloud Map 分层排障、production 回滚和 PR 清理审计。
 
 共享栈不会启动 Fargate Task，也不会修改 API Gateway。Internal ALB 创建后默认只返回受控 404，直到阶段 6 添加 production Listener Rule。
 
-`go-production.yaml` 已可在本地审查，但在 foundation、IAM stack 完成且首个 SHA image 推送到 ECR 前不能部署。production rule 只转发 `/api/v1/*`、`/healthz` 和 `/readyz`；不会为 `/internal/*` 建立 ALB route。Lambda 的内部生成调用仍通过 Cloud Map DNS 直达 Go Task 的 TCP 8080。
+`go-production.yaml` 的公网 ALB 链路使用稳定/Canary 两个 ECS Service 和 Target Group 权重实现 10%/5 分钟 Canary。稳定 Service 保留 Cloud Map；Canary Service 不注册 Cloud Map，平时 `DesiredCount=0`。production rule 只转发 `/api/v1/*`、`/healthz` 和 `/readyz`，不会为 `/internal/*` 建立 ALB route。Lambda 的内部生成调用始终通过 Cloud Map DNS 访问稳定 Service。
 
 ## 参数契约
 
@@ -174,7 +176,7 @@ aws iam create-service-linked-role \
   --aws-service-name ecs.amazonaws.com
 ```
 
-这是阶段 6 创建使用 `awsvpc`、负载均衡和服务发现的 ECS Service 所需的账户级角色，不属于本项目定义的四个应用 IAM Role。
+这是阶段 6 创建使用 `awsvpc`、负载均衡和服务发现的 ECS Service 所需的账户级 service-linked role，不属于本项目模板定义的五个 IAM Role。
 
 ### 4. 本地静态验证
 
@@ -254,10 +256,10 @@ aws cloudformation create-change-set \
   --template-body file://infra/go-iam.yaml \
   --parameters file://infra/parameters/go-iam.local.json \
   --capabilities CAPABILITY_NAMED_IAM \
-  --description 'Stage 5 four isolated Go platform IAM roles; review before execution'
+  --description 'Go platform runtime and deployment IAM roles; review before execution'
 ```
 
-查看时预期恰好有四个 `AWS::IAM::Role`，且没有网络、ALB、ECS Service 或数据库资源：
+查看当前模板时预期恰好有四个 `AWS::IAM::Role`：production/preview 各自的 Execution Role 与 CodeBuild Role；仍没有网络、ALB、ECS Service 或数据库资源：
 
 ```bash
 aws cloudformation describe-change-set \
@@ -269,7 +271,7 @@ aws cloudformation describe-change-set \
   --no-cli-pager
 ```
 
-2026-07-16 云端结果：`github-account-info-go-foundation` 与 `github-account-info-go-iam` 均为 `CREATE_COMPLETE`；IAM stack 的资源清单恰好为四个 `AWS::IAM::Role`，未创建网络、ALB、ECS Service 或数据库资源。阶段 5 至此完成，后续生产 runtime stack 继续通过 foundation/IAM exports 引用这些共享资源。
+Canary Service 由 production CodeBuild Role 管理，不需要 ECS 原生 Canary infrastructure role。CodeBuild 权限只覆盖 `${ProjectName}-production` 与 `${ProjectName}-production-canary` 两个明确 Service。
 
 ## 成本与回滚边界
 
@@ -318,7 +320,7 @@ bash infra/scripts/push-go-production-image.sh
 
 production pipeline 只信任 `master` 分支的 `PUSH` 事件，并额外使用路径过滤。它会运行 `gofmt`、`go mod verify`、`go vet`、`go test`，构建不可变的 `prod-<40位commit-sha>` 镜像，推送并通过 ECR 查询确认镜像存在；只有这些步骤全部成功后才部署 `go-production.yaml`。
 
-部署会等待 ECS Service 稳定，然后通过现有 API Gateway 地址检查 `/healthz` 和 `/readyz`。更新部署 smoke test 失败时恢复上一个 image tag；首次部署失败时删除失败的 runtime stack。CloudFormation/ECS 稳定失败由 ECS deployment circuit breaker 和 CloudFormation rollback 处理。
+部署先让独立 Canary Service 承接 10% 公网流量并观察 5 分钟；通过后公网暂时 100% 指向 Canary，稳定 Service 再通过 Rolling 晋级新镜像，最后公网恢复稳定 Service 100%、Canary 缩容为 0。任一阶段失败都会恢复旧 image tag 与 100/0 权重。
 
 ### 1. 创建 GitHub CodeConnections connection
 
@@ -428,7 +430,7 @@ preview CodeBuild webhook 只接受目标为 `master` 的 PR created/updated/reo
 
 PR merged/closed 时顺序相反：先移除 listener rule 与 Service，再运行带精确 `--confirm-schema pr_<number>` 的 drop task，最后删除 PR stack。镜像由 ECR 14 天 lifecycle 兜底清理。
 
-若 GitHub close webhook 遗漏，EventBridge 默认每天 03:00 UTC 启动 `${ProjectName}-preview-ttl-cleanup`。这个 CodeBuild project 使用 `NO_SOURCE`、非 privileged 环境，只扫描同时带 `Project=${ProjectName}`、`Environment=preview` 和有效 `ExpiresAt` 的 CloudFormation Stack；严格匹配 `${ProjectName}-pr-<1..49999>` 且确认过期后，才用 `PULL_REQUEST_CLOSED` 启动已经验收的 preview cleanup build，并等待其成功。EventBridge 复用现有 Preview CodeBuild Role，额外 trust 受 `SourceAccount` 和精确 Rule ARN 限制，因此不新增第五个角色，也不会扫描或删除 production Stack。
+若 GitHub close webhook 遗漏，EventBridge 默认每天 03:00 UTC 启动 `${ProjectName}-preview-ttl-cleanup`。这个 CodeBuild project 使用 `NO_SOURCE`、非 privileged 环境，只扫描同时带 `Project=${ProjectName}`、`Environment=preview` 和有效 `ExpiresAt` 的 CloudFormation Stack；严格匹配 `${ProjectName}-pr-<1..49999>` 且确认过期后，才用 `PULL_REQUEST_CLOSED` 启动已经验收的 preview cleanup build，并等待其成功。EventBridge 复用现有 Preview CodeBuild Role，额外 trust 受 `SourceAccount` 和精确 Rule ARN 限制，因此不增加额外 IAM Role，也不会扫描或删除 production Stack。
 
 由于 ECS 的 `DeregisterTaskDefinition` 不能按 ARN 收紧，Preview Role 不拥有该破坏性权限；preview Task Definition 暂时 Retain。它们不会运行、不会产生 Fargate 费用，但会占 revision 配额，仍由可信管理员按 RUNBOOK 周期审计后注销，不能给执行 PR 源码的 Role 增加通配注销权限。
 

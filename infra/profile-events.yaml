@@ -1,0 +1,236 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  Credential-free introduction events delivered through SNS and SQS, then
+  verified through the public API with partial retries and a dead-letter queue.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: github-account-info
+    AllowedPattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+  PublicApiUrl:
+    Type: String
+    # consumer 会自行追加 /api/v1/...，因此这里必须只传 API Gateway origin。
+    AllowedPattern: "^https://[^/?#]+$"
+    ConstraintDescription: Enter the public HTTPS API origin without a path or trailing slash.
+  AlarmTopicArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:(aws|aws-us-gov|aws-cn):sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$"
+
+Conditions:
+  HasAlarmTopic: !Not
+    - !Equals
+      - !Ref AlarmTopicArn
+      - ""
+
+Resources:
+  ProfileEventsTopic:
+    # Node 只向 Topic 发布，不直接感知任何 consumer；以后增加审计或通知订阅时
+    # 无需修改核心业务。alias/aws/sns 由 AWS 管理，不产生自管 KMS key 固定费用。
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${ProjectName}-profile-events
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ProfileEventsDeadLetterQueue:
+    # DLQ 是隔离区而不是自动修复器：消息在主队列耗尽重试后停留 14 天，
+    # 运维确认根因已修复后再从控制台 redrive 或删除。
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${ProjectName}-profile-events-dlq
+      SqsManagedSseEnabled: true
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ProfileEventsQueue:
+    # 主队列使用 SSE-SQS。不要改成 alias/aws/sqs：该 AWS 托管 KMS key 无法
+    # 为 SNS subscription 补充投递所需权限，会出现 Topic 成功但 Queue 收不到消息。
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${ProjectName}-profile-events
+      SqsManagedSseEnabled: true
+      MessageRetentionPeriod: 345600
+      ReceiveMessageWaitTimeSeconds: 20
+      # 必须大于 consumer 的 15 秒 Lambda timeout，避免同一消息在函数仍执行时
+      # 重新可见；90 秒也为冷启动、网络抖动和日志落盘留出余量。
+      VisibilityTimeout: 90
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ProfileEventsDeadLetterQueue.Arn
+        # receive 次数包含首次处理；第五次仍失败后由 SQS 自动移入 DLQ。
+        maxReceiveCount: 5
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ProfileEventsQueuePolicy:
+    # SQS 默认不会接受 SNS 投递。SourceAccount + SourceArn 同时限制后，
+    # 只有本账号内这一个 Topic 能向该队列发送消息，避免 confused deputy。
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref ProfileEventsQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowOnlyProfileEventsTopic
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt ProfileEventsQueue.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Ref ProfileEventsTopic
+
+  ProfileEventsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref ProfileEventsTopic
+      Protocol: sqs
+      Endpoint: !GetAtt ProfileEventsQueue.Arn
+      # consumer 直接收到事件 JSON；关闭时 body 会变成包含 Message 字段的 SNS envelope。
+      RawMessageDelivery: true
+
+  ProfileEventConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${ProjectName}-profile-event-consumer
+      Description: Verifies generated introductions through the public API.
+      Runtime: nodejs22.x
+      Architectures:
+        - x86_64
+      Handler: lambda.handler
+      CodeUri: ../apps/profile-event-consumer/dist/
+      MemorySize: 128
+      Timeout: 15
+      Environment:
+        Variables:
+          PUBLIC_API_URL: !Ref PublicApiUrl
+      LoggingConfig:
+        LogFormat: JSON
+      Policies:
+        # SAM 展开为消费指定队列所需的 Receive/Delete/GetAttributes 最小权限。
+        - SQSPollerPolicy:
+            QueueName: !GetAtt ProfileEventsQueue.QueueName
+      Events:
+        ProfileEvents:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ProfileEventsQueue.Arn
+            BatchSize: 10
+            MaximumBatchingWindowInSeconds: 5
+            # 配合 handler 的 batchItemFailures，只重试失败 record，不重放整批消息。
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+      Tags:
+        Project: !Ref ProjectName
+        Environment: production
+        ManagedBy: cloudformation
+
+  ProfileEventConsumerLogGroup:
+    # 日志组显式声明才能固定保留期；Retain 避免删 Stack 时同时丢失排障证据。
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ProjectName}-profile-event-consumer
+      RetentionInDays: 14
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ProfileEventsDeadLetterAlarm:
+    # DLQ 中出现一条消息就需要人工关注；缺少采样按正常处理，避免空队列误报。
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-profile-events-dlq-not-empty
+      AlarmDescription: One or more profile events exhausted all retries.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt ProfileEventsDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      OKActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ProfileEventsQueueAgeAlarm:
+    # 可见消息最老年龄连续两个周期超过五分钟，说明 consumer 停止或处理能力不足。
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-profile-events-oldest-message
+      AlarmDescription: Profile event processing has been delayed for five minutes.
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt ProfileEventsQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 300
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      OKActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref AWS::NoValue]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation
+
+Outputs:
+  ProfileEventsTopicArn:
+    Description: Configure the Node API with this topic ARN after this stack exists.
+    Value: !Ref ProfileEventsTopic
+    Export:
+      Name: !Sub ${ProjectName}-ProfileEventsTopicArn
+  ProfileEventsQueueUrl:
+    Value: !Ref ProfileEventsQueue
+  ProfileEventsDeadLetterQueueUrl:
+    Value: !Ref ProfileEventsDeadLetterQueue

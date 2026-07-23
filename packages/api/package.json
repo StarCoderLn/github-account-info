@@ -13,8 +13,10 @@
 		"test": "tsx --test src/**/*.test.ts"
 	},
 	"dependencies": {
+		"@aws-sdk/client-sns": "^3.1092.0",
 		"@github-account-info/db": "workspace:*",
 		"@github-account-info/env": "workspace:*",
+		"@github-account-info/events": "workspace:*",
 		"@trpc/client": "catalog:",
 		"@trpc/server": "catalog:",
 		"dotenv": "catalog:",
