@@ -246,6 +246,12 @@ Models 集成已经验收。
   （事件表 Name/ARN、调查队列 URL/ARN），再传给 server SAM 参数。stack 不存在时
   保持空参数以兼容旧环境；stack 已存在但输出不完整时直接失败，避免只注入半套
   配置。Node 执行角色仅获得指定表的读写权限和指定队列的 `SendMessage`。
+- 端到端接入部署已通过：Node stack 为 `UPDATE_COMPLETE`，四个 AI Ops 参数和
+  Lambda 环境变量均与 Agent stack 输出一致；既有 10% Canary 的 Deploy 步骤在
+  6 分 11 秒后成功，`live` alias 晋级到版本 5 且没有残留附加权重。公开 tRPC
+  `ops.list` 返回 `{ items: [], nextCursor: null }`，证明页面读取链路已经接通。
+  Node role 的 `access-ai-ops-incidents` inline policy 只包含目标表/索引的
+  `GetItem`、`PutItem`、`UpdateItem`、`Query` 和目标队列的 `SendMessage`。
 
 ### 知识库编排
 
