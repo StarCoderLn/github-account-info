@@ -111,6 +111,7 @@ Resources:
         CloudWatchAlarm:
           Type: EventBridgeRule
           Properties:
+            RuleName: !Sub ${ProjectName}-ai-ops-cloudwatch-alarms
             Pattern:
               source:
                 - aws.cloudwatch

@@ -227,6 +227,11 @@ Models 集成已经验收。
   `delete-failed-agent-stack` 在失败状态守卫通过并删除 stack 后，只精确删除
   `github-account-info-ai-ops-incidents` 和两个 AI Ops Lambda 日志组；模型 Secret、
   部署策略栈及其他业务资源保持不变，避免重建时发生同名冲突。
+- 第三次创建时，SAM 为内嵌 `EventBridgeRule` 生成的物理名因长度截断成
+  `github-account-info-ai-op-...`，没有命中部署策略的
+  `github-account-info-ai-ops-*` 资源边界，导致 `events:DescribeRule` 被拒绝。
+  模板现为规则声明固定的 `${ProjectName}-ai-ops-cloudwatch-alarms` 名称，保持
+  IAM 最小权限不变。
 
 ### 知识库编排
 
