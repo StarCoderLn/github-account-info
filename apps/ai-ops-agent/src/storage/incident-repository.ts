@@ -54,7 +54,7 @@ export class DynamoIncidentRepository implements IncidentRepository {
 					TableName: this.tableName,
 					Key: { incidentId },
 					UpdateExpression:
-						"SET #status = :investigating, updatedAt = :updatedAt REMOVE failure",
+						"SET #status = :investigating, updatedAt = :updatedAt, failure = :emptyFailure",
 					ConditionExpression:
 						"attribute_exists(incidentId) AND #status IN (:queued, :investigating)",
 					ExpressionAttributeNames: { "#status": "status" },
@@ -62,6 +62,7 @@ export class DynamoIncidentRepository implements IncidentRepository {
 						":queued": "queued",
 						":investigating": "investigating",
 						":updatedAt": updatedAt,
+						":emptyFailure": null,
 					},
 				}),
 			);
@@ -82,7 +83,7 @@ export class DynamoIncidentRepository implements IncidentRepository {
 				TableName: this.tableName,
 				Key: { incidentId },
 				UpdateExpression:
-					"SET #status = :completed, investigation = :investigation, updatedAt = :updatedAt REMOVE failure",
+					"SET #status = :completed, investigation = :investigation, updatedAt = :updatedAt, failure = :emptyFailure",
 				ConditionExpression: "#status = :investigating",
 				ExpressionAttributeNames: { "#status": "status" },
 				ExpressionAttributeValues: {
@@ -90,6 +91,7 @@ export class DynamoIncidentRepository implements IncidentRepository {
 					":investigating": "investigating",
 					":investigation": investigation,
 					":updatedAt": updatedAt,
+					":emptyFailure": null,
 				},
 			}),
 		);
