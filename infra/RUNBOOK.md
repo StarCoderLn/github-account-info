@@ -138,3 +138,23 @@ preview Task Definition 使用 `Retain`，因为 `ecs:DeregisterTaskDefinition` 
 - Go log 可记录 request ID、路径模板、状态和耗时，不记录请求凭证或数据库 URL。
 - GitHub PAT 只存在于请求头和短生命周期前端 state；不得进入 Go、CodeBuild、CloudWatch 或故障工单。
 - preview 只使用独立 database credential 和虚构 seed。per-PR schema 是可信协作者的功能隔离，不是恶意多租户安全边界。
+
+## AI Ops Agent
+
+调查路径为 CloudWatch Alarm → EventBridge → alarm-ingest Lambda → SQS →
+investigator Lambda → DynamoDB。`/ops` 仅从 DynamoDB 查询结果，不同步等待模型。
+
+排障顺序：
+
+1. 没有 incident：检查 EventBridge rule metrics 和 alarm-ingest log。
+2. incident 停在 `queued`：检查 AI Ops queue 可见消息、event source mapping 和
+   investigator reserved concurrency。
+3. incident 停在 `investigating`：检查 GitHub Models 429/5xx、Secret ARN 与
+   `models:read` 权限；不要输出 Secret value。
+4. 消息进入 AI Ops DLQ：修复根因后只 redrive 精确消息，不 purge 整条队列。
+5. `INVALID_MODEL_OUTPUT`：保留 evidence 与 model ID，调整 schema/prompt 后重新
+   创建调查；不得跳过 Zod 校验直接保存自由文本。
+
+Agent role 不含 ECS/Lambda/CloudFormation/SQS 写操作。任何建议都只是待人工审批
+的数据；若未来增加执行能力，必须使用独立 role、白名单动作和新的 change set，
+不能扩展当前 investigator role。

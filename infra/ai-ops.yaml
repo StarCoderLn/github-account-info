@@ -1,0 +1,256 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Read-only AI Ops incident ingestion and investigation for github-account-info.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: github-account-info
+  GitHubModelsSecretArn:
+    Type: String
+    NoEcho: true
+    AllowedPattern: "^arn:(aws|aws-us-gov|aws-cn):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$"
+  AiModel:
+    Type: String
+    Description: GitHub Models catalog ID with tool-calling support.
+  NodeApiLogGroup:
+    Type: String
+  GoApiLogGroup:
+    Type: String
+  ProfileConsumerLogGroup:
+    Type: String
+    Default: /aws/lambda/github-account-info-profile-event-consumer
+  ProfileEventsQueueUrl:
+    Type: String
+  ProfileEventsQueueArn:
+    Type: String
+  ProfileEventsDeadLetterQueueUrl:
+    Type: String
+  ProfileEventsDeadLetterQueueArn:
+    Type: String
+
+Resources:
+  IncidentTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub ${ProjectName}-ai-ops-incidents
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: incidentId
+          AttributeType: S
+        - AttributeName: projectKey
+          AttributeType: S
+        - AttributeName: createdKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: incidentId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: by-created-at
+          KeySchema:
+            - AttributeName: projectKey
+              KeyType: HASH
+            - AttributeName: createdKey
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: cloudformation
+
+  InvestigationDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${ProjectName}-ai-ops-dlq
+      SqsManagedSseEnabled: true
+      MessageRetentionPeriod: 1209600
+
+  InvestigationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${ProjectName}-ai-ops
+      SqsManagedSseEnabled: true
+      MessageRetentionPeriod: 345600
+      VisibilityTimeout: 360
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt InvestigationDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  AlarmIngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${ProjectName}-ai-ops-alarm-ingest
+      Runtime: nodejs22.x
+      Handler: alarm-ingest.handler
+      CodeUri: ../apps/ai-ops-agent/dist/
+      MemorySize: 128
+      Timeout: 15
+      LoggingConfig:
+        LogFormat: JSON
+      Environment:
+        Variables:
+          AI_OPS_INCIDENT_TABLE: !Ref IncidentTable
+          AI_OPS_QUEUE_URL: !Ref InvestigationQueue
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref IncidentTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt InvestigationQueue.QueueName
+      Events:
+        CloudWatchAlarm:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.cloudwatch
+              detail-type:
+                - CloudWatch Alarm State Change
+              detail:
+                state:
+                  value:
+                    - ALARM
+                alarmName:
+                  - prefix: !Sub ${ProjectName}-
+
+  InvestigatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${ProjectName}-ai-ops-investigator
+      Runtime: nodejs22.x
+      Handler: investigate.handler
+      CodeUri: ../apps/ai-ops-agent/dist/
+      MemorySize: 512
+      Timeout: 300
+      ReservedConcurrentExecutions: 1
+      LoggingConfig:
+        LogFormat: JSON
+      Environment:
+        Variables:
+          AI_OPS_INCIDENT_TABLE: !Ref IncidentTable
+          GITHUB_MODELS_SECRET_ARN: !Ref GitHubModelsSecretArn
+          AI_MODEL: !Ref AiModel
+          NODE_API_LOG_GROUP: !Ref NodeApiLogGroup
+          GO_API_LOG_GROUP: !Ref GoApiLogGroup
+          PROFILE_CONSUMER_LOG_GROUP: !Ref ProfileConsumerLogGroup
+          PROFILE_EVENTS_QUEUE_URL: !Ref ProfileEventsQueueUrl
+          PROFILE_EVENTS_DLQ_URL: !Ref ProfileEventsDeadLetterQueueUrl
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt InvestigationQueue.QueueName
+        - DynamoDBReadPolicy:
+            TableName: !Ref IncidentTable
+        - DynamoDBWritePolicy:
+            TableName: !Ref IncidentTable
+        - Statement:
+            - Sid: ReadGitHubModelsToken
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref GitHubModelsSecretArn
+            - Sid: QueryOnlyProjectLogs
+              Effect: Allow
+              Action: logs:StartQuery
+              Resource:
+                - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${NodeApiLogGroup}:*
+                - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${GoApiLogGroup}:*
+                - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${ProfileConsumerLogGroup}:*
+                - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-ai-ops-investigator:*
+            - Sid: ReadStartedLogQueryResults
+              Effect: Allow
+              Action: logs:GetQueryResults
+              Resource: "*"
+            - Sid: InspectOnlyProjectQueues
+              Effect: Allow
+              Action: sqs:GetQueueAttributes
+              Resource:
+                - !Ref ProfileEventsQueueArn
+                - !Ref ProfileEventsDeadLetterQueueArn
+            - Sid: ReadProjectAlarmState
+              Effect: Allow
+              Action: cloudwatch:DescribeAlarms
+              Resource: "*"
+            - Sid: ReadProjectStackEvents
+              Effect: Allow
+              Action: cloudformation:DescribeStackEvents
+              Resource:
+                - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}/*
+                - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-go-production/*
+                - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-profile-events/*
+                - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-ai-ops/*
+      Events:
+        InvestigationQueue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt InvestigationQueue.Arn
+            BatchSize: 5
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  InvestigatorLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ProjectName}-ai-ops-investigator
+      RetentionInDays: 14
+
+  AlarmIngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ProjectName}-ai-ops-alarm-ingest
+      RetentionInDays: 14
+
+  AiOpsDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-ai-ops-dlq-not-empty
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt InvestigationDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  AiOpsQueueAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-ai-ops-oldest-message
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt InvestigationQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 600
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  IncidentTableName:
+    Value: !Ref IncidentTable
+  IncidentTableArn:
+    Value: !GetAtt IncidentTable.Arn
+  InvestigationQueueUrl:
+    Value: !Ref InvestigationQueue
+  InvestigationQueueArn:
+    Value: !GetAtt InvestigationQueue.Arn

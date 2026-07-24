@@ -13,6 +13,9 @@
 - `codebuild.yaml`：production 与 preview 两个权限隔离的 CodeBuild project；PR buildspec 内联且需要可信成员审批。
 - `profile-events.yaml`：个人介绍完成事件的 SNS → SSE-SQS queue → publication verifier Lambda → DLQ 链路及队列告警；SSE-SQS 仅负责队列静态加密，部署时传入公开 API origin。
 - `synthetics.yaml`：公开 API 的 CloudWatch Synthetics 巡检、产物 bucket 与失败告警。
+- `ai-ops.yaml`：CloudWatch 告警归一化、SQS/DLQ、DynamoDB incident、Mastra 调查 Lambda 及只读 IAM；不会自动执行修复。
+- `ai-ops-deployer-policy.yaml`：为现有 GitHub Actions OIDC Role 补充部署 AI Ops
+  DynamoDB、SQS、日志组、Alarm 和 EventBridge rule 所需的资源级权限。
 - `server-deployer-policy.yaml`：绑定现有 `github-actions-deployer` 的 customer managed policy；只管理 Node/SAM 的 observability 资源，不创建或替换 OIDC Role。
 - `buildspec/go-production.yml`：格式、依赖、静态检查、测试、镜像构建/推送、production 部署与 smoke-test 回滚。
 - `RUNBOOK.md`：CloudWatch 告警、API/ALB/ECS/Cloud Map 分层排障、production 回滚和 PR 清理审计。
@@ -58,7 +61,65 @@ preview Secret 使用名称 `github-account-info/preview/database-url`。它不�
 ```bash
 cp infra/parameters/go-foundation.example.json infra/parameters/go-foundation.local.json
 cp infra/parameters/go-iam.example.json infra/parameters/go-iam.local.json
+cp infra/parameters/ai-ops.example.json infra/parameters/ai-ops.local.json
 ```
+
+## AI Ops 部署前置与顺序
+
+AI Ops 使用 GitHub Models，不依赖 Bedrock。先在 GitHub 创建只含 `models:read`
+的独立 fine-grained token，再由用户在 Secrets Manager 创建 Secret；token value
+不得写入参数 JSON、Lambda 环境变量或聊天记录。`GitHubModelsSecretArn` 只传 ARN。
+
+本地先执行：
+
+```bash
+pnpm --filter ai-ops-agent build
+sam validate --template-file infra/ai-ops.yaml --lint
+pnpm check:infra
+```
+
+随后填写 `ai-ops.local.json` 中的资源名/ARN和 GitHub Models catalog 中明确支持
+tool calling 的公开 model ID。先创建 AI Ops change set 并审查，执行成功后再把输出
+`IncidentTableName`、`InvestigationQueueUrl/Arn` 传给 Node server stack 的
+`AiOps*` 参数。四个参数默认均为空，因此在接入前不会改变现有 API 行为。
+
+AI Ops 的 DynamoDB、两条 SQS 队列和 Lambda 均按使用量计费；GitHub Models 免费
+额度有频率限制。Agent reserved concurrency 固定为 1，单次最多 4 个模型 step 和
+6 次工具调用，429/5xx 由 SQS 重试。
+
+当前推荐模型是 `openai/gpt-4.1`，GitHub catalog 明确标注其支持 tool calling。
+同一 catalog 内切换模型只需更新 `AiModel` 参数，但目标模型也必须支持 tool
+calling 和结构化输出。
+
+正式创建 AI Ops Stack 前，先创建并审查补充部署权限 Stack：
+
+```bash
+aws cloudformation create-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-ai-ops-deployer-policy \
+  --change-set-name ai-ops-deployer-policy-review \
+  --change-set-type CREATE \
+  --template-body file://infra/ai-ops-deployer-policy.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+Change Set 只能包含一个 `AWS::IAM::ManagedPolicy` Add。它绑定现有
+`github-actions-deployer`，不创建或替换 OIDC Role。后续必须由该 OIDC Role 部署
+AI Ops Stack，不使用账号 root 凭证。
+
+仓库中的 `AI Ops Change Set` workflow 只支持 `workflow_dispatch`，推荐顺序：
+
+1. `create-policy-change-set`：创建部署补充 policy 的待审 Change Set。
+2. 在 CloudFormation 审查只有一个 managed policy 后，运行
+   `execute-policy-change-set` 并填写上一步的 Change Set 名。
+3. 在 GitHub Repository Secrets 新增 `AI_OPS_GITHUB_MODELS_TOKEN`，value 是只含
+   `models:read` 的 token；运行 `create-model-secret`。token 不作为 workflow
+   input，也不会输出。
+4. 运行 `create-agent-change-set`，工作流会构建 Agent、查询现有 profile queue，
+   再创建待审 Agent Change Set。
+5. 审查资源、IAM 和费用后，运行 `execute-agent-change-set`。
+
+执行操作与创建 Change Set 是两个独立的手工选择，不存在 push 自动部署路径。
 
 ## Node/SAM 部署角色权限迁移
 

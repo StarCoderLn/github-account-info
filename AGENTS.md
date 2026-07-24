@@ -1,17 +1,54 @@
-# 项目踩坑与教训(AGENTS.md)
+# 项目踩坑与教训（AGENTS.md）
 
-- [T-001] GitHub REST API 坑:不带 `User-Agent` 头会被直接拒绝(403)。所有调 api.github.com 的请求必须显式注入 `User-Agent`,同时带 `Accept: application/vnd.github+json` 和 `X-GitHub-Api-Version: 2022-11-28`。
-- [T-001] GitHub 403 语义重载坑:401=token 无效,但 403 既可能是「限流」也可能是「权限不足」,必须读响应头 `x-ratelimit-remaining === "0"` 来区分,不能笼统当成一种错误处理。
-- [T-001] fetch 超时坑:用 `AbortSignal.timeout(ms)` 触发的超时,抛出的是 `DOMException` 且 `name === "TimeoutError"`(不是 `AbortError`)。catch 里判断超时要按 `TimeoutError` 匹配,否则会误判为普通网络错误。
-- [T-001] 凭证安全约定:第三方 token(如 GitHub PAT)只允许出现在请求头里,禁止写日志、禁止随响应返回给调用方。service 层抛语义化自定义错误,由路由层统一映射为 TRPCError,token 不外泄。
-- [T-001] Drizzle schema GitHub ID 类型陷阱:GitHub 用户 ID 会超过 32 位整型上限(2,147,483,647),若用 `integer()` 建列,真实账号插入时会抛 overflow 错误。必须用 `bigint("github_id", { mode: "number" })` 映射为 PostgreSQL bigint,才能覆盖全部 GitHub ID 空间。凡存储外部平台的数值 ID,先确认其取值范围再选列类型,不要默认用 `integer`。
-- [T-001] shadcn 组件底层是 `@base-ui/react` 而非 Radix UI:本项目 shadcn 风格组件(Dialog、AlertDialog 等)的 primitive 来自 `@base-ui/react/<component-name>`,而非标准 shadcn 文档里的 `@radix-ui/react-*`。动画状态 Tailwind 变体也不同——Base UI 用 `data-open:` / `data-closed:`,Radix 用 `data-[state=open]:` / `data-[state=closed]:`。新增交互组件时不要直接照搬 shadcn 官网代码,需改用 `@base-ui/react` 的导入路径与 API。
-- [T-001] TanStack Router `routeTree.gen.ts` 禁止手动编辑:该文件由开发服务器(`pnpm dev:web`)在检测到 `src/routes/` 变更后自动重新生成。新增路由只需在 `apps/web/src/routes/` 下创建对应文件并用 `createFileRoute("/path")({ component: ... })` 声明即可;手动改动 `routeTree.gen.ts` 会在下次启动时被完全覆盖。
-- [T-002] tRPC 行类型推导约定:前端组件需要消费某个 procedure 的输出类型时,用 `inferRouterOutputs<AppRouter>` 从 `@trpc/server` 推导(`type RouterOutputs = inferRouterOutputs<AppRouter>; type AccountRow = RouterOutputs["account"]["list"][number]`),禁止手写与后端重复的 interface。这样后端改字段后前端会立刻报类型错误,不会出现运行时字段缺失的静默 bug。
-- [T-003] 前后端可选字符串字段 schema 边界陷阱:前端表单用 `z.union([z.string().email(), z.literal("")])` 把"未填"表示为空字符串 `""`,但后端 Drizzle/zod insert schema 的对应列类型是 `string | null | undefined`——空字符串不等于 null。调用 `account.create` / `account.update` mutation 前必须做转换:`email: formData.email === "" ? null : formData.email`。漏掉这步后端 zod 校验会直接拒绝请求。凡前端"可留空"字段与后端"nullable 列"对接时,都需要在 mutation 调用处显式转换,不要依赖 zod coerce 或隐式转换。
-- [T-003] Base UI Dialog 双关闭按钮陷阱:`DialogContent`(来自 `@base-ui/react`) 默认 `showCloseButton=true`,会在右上角渲染 X 图标按钮。若再在 `DialogFooter` 里放文字"关闭/Close"按钮,页面同时存在两个关闭入口。非刻意设计时应二选一:要么在 `DialogContent` 传 `showCloseButton={false}`,只保留 Footer 按钮;要么删掉 Footer 的文字按钮。避免用户困惑。
-- [T-003] 实现文件名须与 spec 保持一致:新建组件前先确认 `specs/` 下 design.md 里标注的文件名,实现时直接用规格里的名字(如 `account-form.tsx` 而非 `account-form-dialog.tsx`)。文件名偏离会导致 review 指出 naming deviation,后续重命名还要同步所有 import。
-- [T-006] update mutation 必须与 create 保持一致的错误处理:create procedure 里若对数据库唯一约束错误做了捕获(如 `isUniqueConstraintError` 映射为 `CONFLICT`),update procedure 里必须同步加入同样的守卫。只在 create 捕获而 update 不捕获,会让编辑操作把内部 DB 错误直接抛给客户端,产生行为不一致的 bug。凡新增带唯一约束的字段,create 与 update 两条路径都要检查。
-- [T-006] 敏感 token 用完即清(不能等 dialog 关闭):GitHub PAT 等临时凭证完成请求后,须在 try 块末尾立即 `setToken(""); fetchMutation.reset()` 清除状态,不能依赖 dialog 关闭时的 `useEffect` else 分支来清除——那样凭证在 React state 里会多存留一个完整渲染周期。设计文档里"token 用完即丢"的安全约定必须在请求成功后立刻兑现,而非在 UI 生命周期结束时。
-- [T-006] SSM 隧道下的 Node PostgreSQL TLS 坑:`pg@8`/当前 `pg-connection-string` 会把 `sslmode=require` 按 `verify-full` 处理,而连接地址被隧道改写为 `127.0.0.1` 后无法匹配 RDS 证书主机名。仅在本机 SSM port-forward migration 中显式使用 `sslmode=require&uselibpqcompat=true`;production Go Task 直连真实 RDS hostname 时仍必须使用 `verify-full`,不能把兼容参数带入 runtime。
-- [T-007] CloudFormation 控制面权限不等于底层资源权限:`AWSCloudFormationFullAccess` 只允许操作 Stack/Change Set,不会自动授予部署者 `logs:ListTagsForResource`、`logs:CreateLogDelivery` 或 `cloudwatch:PutMetricAlarm`。新增 `AWS::Logs::LogGroup`、API Gateway access logging、`AWS::CloudWatch::Alarm` 时,必须同步审查执行 CloudFormation 的 deployment principal,且从 Events 中最早的具体 `*_FAILED` 找根因;`Resource update cancelled` 只是连带结果。紧急 inline policy 恢复后要迁移到 IaC 管理的 customer managed policy,按“先附加并验收、后删除 inline”避免权限空窗,禁止用 `CloudWatchFullAccess` 掩盖缺口。
+编号格式为 `F<Feature>-L<Lesson>`：`F` 对应 `specs/` 下的功能目录编号，`L` 是该
+功能内唯一的经验序号。编号只用于稳定检索和追溯，不复用 tasks.md 的 `T-xxx`。
+
+## Feature 1：GitHub 账号获取
+
+- [F1-L01] GitHub REST API 坑：不带 `User-Agent` 头会被直接拒绝（403）。所有调用 `api.github.com` 的请求必须显式注入 `User-Agent`，同时带 `Accept: application/vnd.github+json` 和 `X-GitHub-Api-Version: 2022-11-28`。
+- [F1-L02] GitHub 403 语义重载坑：401 表示 token 无效，但 403 既可能是“限流”也可能是“权限不足”，必须读响应头 `x-ratelimit-remaining === "0"` 区分，不能笼统映射为同一种错误。
+- [F1-L03] fetch 超时坑：用 `AbortSignal.timeout(ms)` 触发的超时会抛出 `DOMException`，且 `name === "TimeoutError"`（不是 `AbortError`）。catch 必须按 `TimeoutError` 判断，否则会误报为普通网络错误。
+- [F1-L04] 凭证安全约定：第三方 token（如 GitHub PAT）只允许出现在请求头里，禁止写日志、禁止随响应返回调用方。service 层抛语义化自定义错误，由路由层统一映射为 `TRPCError`，token 不外泄。
+- [F1-L05] Drizzle schema GitHub ID 类型陷阱：GitHub 用户 ID 会超过 32 位整型上限（2,147,483,647）。必须用 `bigint("github_id", { mode: "number" })` 映射为 PostgreSQL bigint。存储任何外部平台数值 ID 前都要先确认范围，不能默认使用 `integer`。
+
+## Feature 3：账号管理页面
+
+- [F3-L01] shadcn 组件底层是 `@base-ui/react` 而非 Radix UI：本项目 Dialog、AlertDialog 等 primitive 来自 `@base-ui/react/<component-name>`。动画状态使用 `data-open:` / `data-closed:`，不能直接照搬 Radix 的 `data-[state=open]:` / `data-[state=closed]:`。
+- [F3-L02] TanStack Router `routeTree.gen.ts` 禁止手动编辑：该文件由开发服务器（`pnpm dev:web`）根据 `apps/web/src/routes/` 自动生成。新增路由只创建 route 文件并声明 `createFileRoute(...)`。
+- [F3-L03] tRPC 行类型推导约定：前端消费 procedure 输出时，用 `inferRouterOutputs<AppRouter>` 推导，禁止手写与后端重复的 interface，避免后端字段变更后出现静默不一致。
+- [F3-L04] 前后端可选字符串字段边界：前端表单常用空字符串表示“未填”，后端 nullable 列接收的是 `null | undefined`。调用 mutation 前必须显式把 `""` 转为 `null`，不能依赖隐式转换。
+- [F3-L05] Base UI Dialog 双关闭按钮坑：`DialogContent` 默认渲染右上角关闭按钮。若 Footer 还放文字关闭按钮，应传 `showCloseButton={false}` 或删除 Footer 按钮，避免重复入口。
+- [F3-L06] 实现文件名须与 spec 一致：创建文件前先核对 `specs/` 中 design.md 的命名，避免 review 后再重命名并同步全部 import。
+- [F3-L07] update mutation 必须与 create 保持一致的错误处理：若 create 捕获数据库唯一约束并映射为 `CONFLICT`，update 也必须加入相同守卫，不能把内部数据库错误直接抛给客户端。
+- [F3-L08] 敏感 token 用完即清：GitHub PAT 等临时凭证完成请求后，要在成功路径立即清除 state 并 reset mutation，不能等待 Dialog 关闭，否则凭证会在 React state 中额外存留一个渲染周期。
+
+## Feature 4：Go 个人主页与容器平台
+
+- [F4-L01] SSM 隧道下的 Node PostgreSQL TLS 坑：`pg@8`/当前 `pg-connection-string` 会把 `sslmode=require` 按 `verify-full` 处理，而隧道地址 `127.0.0.1` 无法匹配 RDS 证书主机名。仅本机 SSM port-forward migration 使用 `sslmode=require&uselibpqcompat=true`；production Go Task 直连真实 RDS hostname 时仍使用 `verify-full`。
+- [F4-L02] CloudFormation 控制面权限不等于底层资源权限：`AWSCloudFormationFullAccess` 只允许操作 Stack/Change Set，不自动授予 `logs:ListTagsForResource`、`logs:CreateLogDelivery` 或 `cloudwatch:PutMetricAlarm`。部署失败应从 Events 中最早的具体 `*_FAILED` 找根因；`Resource update cancelled` 通常只是连带结果。
+- [F4-L03] 紧急 inline policy 只能用于恢复：最终权限事实来源必须迁回 IaC 管理的 customer managed policy，并按“先附加并验收、后删除 inline”处理，避免权限空窗；禁止用 `CloudWatchFullAccess` 掩盖精确权限缺口。
+
+Feature 4 的完整 AWS/Cloudflare 实测证据位于
+`specs/4.go-profile-platform/verification.md`；本节只保留可复用的工程教训。
+
+## Feature 5：运行稳定性与异步事件链路
+
+- [F5-L01] `alias/aws/sqs` 不适合当前 SNS → SQS 加密链路：该 AWS 托管 KMS key 的策略不能为 SNS 补充所需的 `GenerateDataKey`/`Decrypt` 权限，会出现 SNS 接受发布但消息无法进入队列。当前方案使用 SSE-SQS；若必须使用 KMS，应改用可管理 policy 的 customer managed key，并评估固定费用。
+- [F5-L02] SQS Lambda consumer 必须同时实现 partial batch failure 并在 event source mapping 启用 `ReportBatchItemFailures`。只返回失败 record 的 `itemIdentifier`，否则一条坏消息会让同批成功消息重复消费。
+- [F5-L03] SNS publish 成功不等于事件链路成功：验收必须继续检查 SQS 指标、consumer 日志及业务回读结果。DLQ 演练使用“契约合法但业务不存在”的测试事件，问题修复前禁止 redrive；人工查看主队列也会改变 receive count 和 visibility。
+- [F5-L04] Lambda alias 灰度的前提是 API Gateway integration 和 `AWS::Lambda::Permission` 都指向 `live` alias。若仍调用函数 ARN 或 `$LATEST`，配置 `AdditionalVersionWeights` 也不会影响真实流量；发布结束还要显式清空旧附加权重。
+- [F5-L05] 当前账号无法启用 CodeDeploy（`SubscriptionRequiredException`），Node 灰度因此使用 Lambda 原生 alias 权重。账号能力是部署设计输入，不能先假定某项 AWS 服务必然可用。
+- [F5-L06] 带 Cloud Map Service Registry 的 ECS Service 不能直接套用所需的原生 Canary strategy。当前使用 Stable/Canary 双 Service：只有 Stable 注册 Cloud Map，Canary 只接入公网备用 Target Group，避免内部写链路提前命中新版本。
+- [F5-L07] ALB weighted target groups 只负责按权重分流，不会在某组为空或不健康时自动把流量转移到另一组。发布脚本必须先等待 Canary target healthy，再开放权重；失败时同时恢复旧镜像、100/0 权重和 Canary `DesiredCount=0`。
+
+Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
+`specs/5.operational-resilience/tasks.md` 与运行手册中。
+
+## Feature 6：AI Ops Agent
+
+- [F6-L01] AI Ops 工具边界：模型不能直接接收 ARN、URL、shell 或 Logs Insights query。所有工具输入只能是共享 schema 中的 component/queue enum，再由本地 resource catalog 映射固定资源；日志必须先脱敏、截断再进入模型。
+- [F6-L02] Agent 结论不是事实来源：Mastra 输出必须经 `investigationSchema` 校验，hypothesis 只能引用真实 evidence ID；证据不足时 `rootCause` 为 `null`。第一版 investigator role 禁止 ECS、Lambda、CloudFormation、SQS 写操作，remediation 永远要求人工审批。
+- [F6-L03] GitHub Models 凭证约定：ChatGPT 会员不能充当 API key。运行时使用只含 `models:read` 的独立 GitHub token，value 只存 Secrets Manager；模板、参数文件、环境变量、队列、prompt 日志和 API 响应只能出现 Secret ARN 或公开 model ID。
+- [F6-L04] AWS root 不能作为日常部署身份：即使当前本地 AWS 凭证解析为 root，也只能用于账号恢复和极少数 root-only 操作。应用部署统一使用 GitHub Actions OIDC 短期凭证；先核对 role trust policy 的 repository/branch subject。本项目现有 deployer role 只信任 `master`，feature branch 不能直接部署。
+- [F6-L05] AI Ops 完成状态必须分层记录：“代码侧 MVP、部署准备、云端部署、真实链路验收”是四个不同里程碑。测试、构建和 SAM 静态校验通过只说明前两层完成；stack、Secret、服务接入和故障演练完成前，禁止写成“已全部完成”。
+- [F6-L06] GitHub Models 免费额度是容量边界：默认 `openai/gpt-4.1` 需要 tool calling 和结构化输出；免费 High 档当前按 10 RPM/50 RPD 规划。单次调查最多 4 个模型 step，保守容量约 12 次完整调查/日。外部限额可能变化，上线前必须复核，且禁止静默回退到可能收费的 provider。

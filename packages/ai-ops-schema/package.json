@@ -1,0 +1,26 @@
+{
+	"name": "@github-account-info/ai-ops-schema",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./incident": "./src/incident.ts",
+		"./investigation": "./src/investigation.ts",
+		"./remediation": "./src/remediation.ts",
+		"./event": "./src/event.ts"
+	},
+	"scripts": {
+		"check-types": "tsc --noEmit",
+		"test": "tsx --test src/**/*.test.ts"
+	},
+	"dependencies": {
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@github-account-info/config": "workspace:*",
+		"@types/node": "catalog:",
+		"tsx": "^4.19.2",
+		"typescript": "catalog:"
+	}
+}

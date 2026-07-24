@@ -27,6 +27,17 @@ Feature 4 采用渐进迁移：Node Lambda 保留 GitHub PAT 与账号管理写�
 
 Feature 5 直接复用现有业务链路，不创建独立演示项目。详细需求、设计、完成项与云端验收步骤见 `specs/5.operational-resilience/`。
 
+## AI 运维扩展（2026-07-24）
+
+| 序号 | feature | 说明 | 依赖 | 状态 |
+| --- | --- | --- | --- | --- |
+| 6 | ai-ops-agent | CloudWatch 告警驱动的异步 AI 调查、证据聚合、根因建议与人工审批边界 | 5 | 🚧 进行中 |
+
+Feature 6 继续复用当前 Turborepo 和既有 AWS 资源，不另建演示仓库。由于当前
+AWS 账号不能使用 Amazon Bedrock，模型推理采用 Mastra + GitHub Models
+免费原型额度；Agent 运行、事件触发、状态存储、IAM 与审计仍部署在 AWS。
+详细需求、设计和执行任务见 `specs/6.ai-ops-agent/`。
+
 **执行顺序**：1、2 并行完成 → 3 依赖 1/2 接口，已完成。
 
 ## 关键决策

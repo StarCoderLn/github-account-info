@@ -14,9 +14,14 @@ icon: BookOpen
 
 <Cards>
   <Card
-    title="部署全景"
-    description="先理解 Node、Go、Cloudflare、API Gateway、ECS 与 RDS 如何协作。"
+    title="当前部署全景"
+    description="先浏览 Node、Go、事件链路和 AI Ops 如何协作。"
     href="/docs/deployment"
+  />
+  <Card
+    title="架构图总览"
+    description="按需求演进顺序查看各阶段架构图。"
+    href="/docs/deployment/architecture-gallery"
   />
   <Card
     title="Node Lambda 部署实录"
@@ -28,6 +33,16 @@ icon: BookOpen
     description="从容器化开始，逐步搭建 ECS、ALB、VPC Link、CI/CD 和 PR Preview。"
     href="/docs/deployment/go-service"
   />
+  <Card
+    title="稳定性与异步事件"
+    description="继续加入 Synthetics、SNS/SQS/DLQ，以及 Node 和 Go 的灰度发布。"
+    href="/docs/deployment/operations-reliability"
+  />
+  <Card
+    title="AI Ops Agent"
+    description="在现有监控证据之上搭建只读调查 Agent，并保留人工审批边界。"
+    href="/docs/deployment/ai-ops-agent"
+  />
 </Cards>
 
 ## 文档与事实来源
@@ -36,6 +51,9 @@ icon: BookOpen
 - `infra/*.yaml` 是 AWS 基础设施的事实来源。
 - `packages/db/src/migrations/` 是生产数据库结构的事实来源。
 - `specs/4.go-profile-platform/` 保存需求、设计决策和真实验收记录。
+- `specs/5.operational-resilience/` 保存稳定性、事件链路与灰度发布记录。
+- `apps/ai-ops-agent/README.md` 和 `specs/6.ai-ops-agent/` 保存 AI Ops
+  实现边界、成本估算、部署准备和待验收事项。
 - `infra/RUNBOOK.md` 保存线上日常运维与故障处置命令。
 
 当教程与代码出现差异时，先检查代码和 CloudFormation，再更新教程；不要为了匹配旧文档而回退已经验证的安全边界。
