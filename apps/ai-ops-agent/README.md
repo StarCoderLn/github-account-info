@@ -203,6 +203,17 @@ token。
 这些结果证明代码、类型、构建和静态基础设施边界通过，不代表真实 AWS/GitHub
 Models 集成已经验收。
 
+2026-07-25 首次真实部署验证：
+
+- `create-model-secret` 成功，GitHub Models token 已写入 Secrets Manager，任务
+  摘要确认没有输出 secret value。
+- `create-agent-change-set` 的构建、类型检查、测试、SAM 校验与打包均成功。
+- 创建 Change Set 前读取现有 profile events Queue ARN 时，OIDC 部署角色因缺少
+  `sqs:GetQueueAttributes` 失败；当时尚未创建 Agent stack 或运行时资源。
+- 修复只为 `${ProjectName}-profile-events` 与
+  `${ProjectName}-profile-events-dlq` 增加 `sqs:GetQueueAttributes`，不授予发送、
+  接收、删除消息或修改队列的权限。
+
 ### 知识库编排
 
 Fumadocs 知识库按需求开发顺序展示专题：

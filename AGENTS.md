@@ -52,3 +52,4 @@ Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
 - [F6-L04] AWS root 不能作为日常部署身份：即使当前本地 AWS 凭证解析为 root，也只能用于账号恢复和极少数 root-only 操作。应用部署统一使用 GitHub Actions OIDC 短期凭证；先核对 role trust policy 的 repository/branch subject。本项目现有 deployer role 只信任 `master`，feature branch 不能直接部署。
 - [F6-L05] AI Ops 完成状态必须分层记录：“代码侧 MVP、部署准备、云端部署、真实链路验收”是四个不同里程碑。测试、构建和 SAM 静态校验通过只说明前两层完成；stack、Secret、服务接入和故障演练完成前，禁止写成“已全部完成”。
 - [F6-L06] GitHub Models 免费额度是容量边界：默认 `openai/gpt-4.1` 需要 tool calling 和结构化输出；免费 High 档当前按 10 RPM/50 RPD 规划。单次调查最多 4 个模型 step，保守容量约 12 次完整调查/日。外部限额可能变化，上线前必须复核，且禁止静默回退到可能收费的 provider。
+- [F6-L07] 部署前资源发现也需要显式最小权限：AI Ops workflow 在创建 CloudFormation Change Set 前，会用 `sqs:GetQueueAttributes` 将现有 profile events Queue URL 解析为 ARN。部署策略不能只覆盖将要创建的 AI Ops 队列，还要为 `${ProjectName}-profile-events` 与 `${ProjectName}-profile-events-dlq` 单独授予只读 `sqs:GetQueueAttributes`；不要为了资源发现授予 `sqs:*` 或消息读写权限。真实部署验证时应区分“构建/打包成功”和“Change Set 已创建”，后者失败不代表已有运行时资源。

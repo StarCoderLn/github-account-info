@@ -64,6 +64,12 @@ Resources:
             Effect: Allow
             Action: sqs:ListQueues
             Resource: "*"
+          - Sid: ReadProfileEventQueuesForDeployment
+            Effect: Allow
+            Action: sqs:GetQueueAttributes
+            Resource:
+              - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ProjectName}-profile-events
+              - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ProjectName}-profile-events-dlq
           - Sid: ManageAiOpsLogGroups
             Effect: Allow
             Action:
