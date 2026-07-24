@@ -128,6 +128,11 @@ AI Ops Stack，不使用账号 root 凭证。
 
 执行操作与创建 Change Set 是两个独立的手工选择，不存在 push 自动部署路径。
 
+Agent stack 成功后，下一次 Node Lambda 部署会从
+`github-account-info-ai-ops` stack 读取事件表 Name/ARN 和调查队列 URL/ARN，
+传入 `apps/server/template.yaml` 的四个可选参数，再通过既有 10% Canary 发布。
+这些输出不是凭证；不要把物理资源标识重复维护为 GitHub Secret/Variable。
+
 ## Node/SAM 部署角色权限迁移
 
 `github-actions-deployer` 曾用 Console inline policy 临时补齐 API Gateway access log 与 CloudWatch Alarm 权限。长期方案由 `server-deployer-policy.yaml` 创建 customer managed policy，再绑定同一个 Role；`.github/workflows/deploy.yml` 的 Role ARN、Node/SAM Stack 和所有运行时资源均不变化。
