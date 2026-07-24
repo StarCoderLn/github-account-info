@@ -232,6 +232,16 @@ Models 集成已经验收。
   `github-account-info-ai-ops-*` 资源边界，导致 `events:DescribeRule` 被拒绝。
   模板现为规则声明固定的 `${ProjectName}-ai-ops-cloudwatch-alarms` 名称，保持
   IAM 最小权限不变。
+- 固定规则名后，Agent stack 达到 `CREATE_COMPLETE`，14 个独立资源全部
+  `CREATE_COMPLETE`。两支 Lambda 均为 `Active`，SQS event source mapping 为
+  `Enabled`（`BatchSize: 1`、`MaximumConcurrency: 2`、
+  `ReportBatchItemFailures`），EventBridge 规则为 `ENABLED`，事件表为
+  `ACTIVE` 且 PITR/TTL 已启用，两条 AI Ops 告警为 `OK`，主队列与 DLQ 均为空。
+  本次只做只读运行态验收，没有人为触发告警或消耗 GitHub Models 推理额度。
+- 最后一次执行中，AWS 栈已经成功，但 workflow 误从 `describe-change-set` 查询
+  API 不返回的 `ChangeSetType`，得到 `None` 后错误等待 `stack-update-complete`。
+  执行逻辑现改为在执行前读取 stack 状态：`REVIEW_IN_PROGRESS` 使用 create
+  waiter，其他可执行状态使用 update waiter。
 
 ### 知识库编排
 

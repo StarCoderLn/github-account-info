@@ -18,6 +18,7 @@ for (const fragment of [
 	"--change-set-type",
 	"stack-create-complete",
 	"stack-update-complete",
+	"REVIEW_IN_PROGRESS",
 	"ROLLBACK_COMPLETE",
 	"aws dynamodb delete-table --table-name \"$table_name\"",
 	"aws logs delete-log-group --log-group-name \"$log_group\"",
@@ -32,7 +33,13 @@ for (const fragment of [
 	}
 }
 
-for (const forbidden of ["push:", "pull_request:", "sam deploy", "--no-confirm-changeset"]) {
+for (const forbidden of [
+	"push:",
+	"pull_request:",
+	"sam deploy",
+	"--no-confirm-changeset",
+	"--query ChangeSetType",
+]) {
 	if (workflow.includes(forbidden)) {
 		throw new Error(`AI Ops workflow must remain manual/change-set only: ${forbidden}`);
 	}
