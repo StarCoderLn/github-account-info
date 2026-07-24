@@ -118,7 +118,9 @@ AI Ops Stack，不使用账号 root 凭证。
    input，也不会输出。
 4. 运行 `create-agent-change-set`，工作流会构建 Agent、查询现有 profile queue，
    再创建待审 Agent Change Set。
-5. 审查资源、IAM 和费用后，运行 `execute-agent-change-set`。
+5. 审查资源、IAM 和费用后，运行 `execute-agent-change-set`。执行前 workflow
+   读取 stack 状态；`REVIEW_IN_PROGRESS` 走 create waiter，其余已有 stack 走
+   update waiter，并等待 CloudFormation 最终状态。
 6. 只有首次创建失败且 stack 处于 `ROLLBACK_COMPLETE` 或 `CREATE_FAILED` 时，
    才能运行 `delete-failed-agent-stack`；该操作会拒绝删除健康 stack，并在 stack
    删除完成后精确清理因 `DeletionPolicy: Retain` 遗留的 AI Ops 事件表和两个

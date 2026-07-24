@@ -91,15 +91,14 @@ jobs:
             echo "change_set_name is required" >&2
             exit 1
           fi
-          change_set_type="$(aws cloudformation describe-change-set \
+          stack_status="$(aws cloudformation describe-stacks \
             --stack-name github-account-info-ai-ops-deployer-policy \
-            --change-set-name "$CHANGE_SET_NAME" \
-            --query ChangeSetType \
+            --query "Stacks[0].StackStatus" \
             --output text)"
           aws cloudformation execute-change-set \
             --stack-name github-account-info-ai-ops-deployer-policy \
             --change-set-name "$CHANGE_SET_NAME"
-          if [[ "$change_set_type" == "CREATE" ]]; then
+          if [[ "$stack_status" == "REVIEW_IN_PROGRESS" ]]; then
             aws cloudformation wait stack-create-complete \
               --stack-name github-account-info-ai-ops-deployer-policy
           else
@@ -239,15 +238,14 @@ jobs:
             echo "change_set_name is required" >&2
             exit 1
           fi
-          change_set_type="$(aws cloudformation describe-change-set \
+          stack_status="$(aws cloudformation describe-stacks \
             --stack-name github-account-info-ai-ops \
-            --change-set-name "$CHANGE_SET_NAME" \
-            --query ChangeSetType \
+            --query "Stacks[0].StackStatus" \
             --output text)"
           aws cloudformation execute-change-set \
             --stack-name github-account-info-ai-ops \
             --change-set-name "$CHANGE_SET_NAME"
-          if [[ "$change_set_type" == "CREATE" ]]; then
+          if [[ "$stack_status" == "REVIEW_IN_PROGRESS" ]]; then
             aws cloudformation wait stack-create-complete \
               --stack-name github-account-info-ai-ops
           else
