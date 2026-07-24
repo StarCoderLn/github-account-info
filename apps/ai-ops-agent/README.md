@@ -266,6 +266,12 @@ Models 集成已经验收。
 - 健康场景下 GitHub Models 会自然返回 `severity: "none"` 与
   `recommendation.risk: "none"`。provider 边界现允许这两个值并统一映射为内部
   契约的 `low`；共享 schema、持久化格式和页面状态枚举保持不变。
+- 最终真实链路验收完成：通过公开 `ops.create` 创建的受控手工事件成功经历
+  Node API → DynamoDB → SQS → Investigator Lambda → GitHub Models → DynamoDB，
+  随后由公开 `ops.get` 读到 `status: completed`。结论使用
+  `openai/gpt-4.1`，`severity: low`、`rootCause: null`、`confidence: 1`，
+  evidence 同时包含 CloudWatch 告警、CloudFormation 部署事件和脱敏日志，
+  recommendation 保持 `approvalRequired: true`，最终 `failure: null`。
 
 ### 知识库编排
 
