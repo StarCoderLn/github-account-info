@@ -257,6 +257,12 @@ Models 集成已经验收。
   尚未调用 GitHub Models。原因是 esbuild banner 和被打包依赖都声明了同名
   import。banner 现改用私有别名 `__createRequire`；创建 Change Set 前还会在
   Node 22 中直接 import 两个最终 `.mjs` 产物，语法或模块初始化失败将阻止部署。
+- bundle 修复后的调查已成功调用 GitHub Models，但模型首次返回了 schema 外的
+  `findings`/`primaryEvidence` 结构。Mastra 的结构化输出校验错误此前未被识别，
+  事件会错误重试；同时 repository 在 investigating 状态移除了 `failure` 字段，
+  与共享 schema 要求的 `failure: null` 冲突，导致 `/ops` 读取 500。现在明确提示
+  唯一允许的输出字段、将结构化校验错误映射为终态 `INVALID_MODEL_OUTPUT`，并在
+  investigating/completed 状态始终保存 `failure: null`。
 
 ### 知识库编排
 

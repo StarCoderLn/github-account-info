@@ -7,7 +7,10 @@ import type {
 } from "@github-account-info/ai-ops-schema";
 import type { SQSEvent } from "aws-lambda";
 
-import type { Investigator } from "../agent/agent";
+import {
+	InvalidModelOutputError,
+	type Investigator,
+} from "../agent/agent";
 import type { IncidentRepository } from "../storage/incident-repository";
 import { createInvestigateHandler } from "./investigate";
 
@@ -142,5 +145,32 @@ describe("investigate handler", () => {
 		assert.deepEqual(response.batchItemFailures, [
 			{ itemIdentifier: "message-1" },
 		]);
+	});
+
+	it("records invalid model output as a terminal failure", async () => {
+		let failureCode: string | undefined;
+		const repository: IncidentRepository = {
+			get: async () => incident,
+			begin: async () => true,
+			complete: async () => {},
+			fail: async (_id, failure) => {
+				failureCode = failure.code;
+			},
+		};
+		const investigator: Investigator = {
+			investigate: async () => {
+				throw new InvalidModelOutputError();
+			},
+		};
+		const handler = createInvestigateHandler({ repository, investigator });
+
+		const response = await handler(
+			event(
+				JSON.stringify({ schemaVersion: 1, incidentId: incident.incidentId }),
+			),
+		);
+
+		assert.equal(failureCode, "INVALID_MODEL_OUTPUT");
+		assert.deepEqual(response.batchItemFailures, []);
 	});
 });
