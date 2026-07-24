@@ -19,8 +19,8 @@ await build({
 	sourcemap: true,
 	banner: {
 		js: `
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
+import { createRequire as __createRequire } from 'module';
+const require = __createRequire(import.meta.url);
 `.trim(),
 	},
 });

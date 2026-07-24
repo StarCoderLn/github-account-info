@@ -27,6 +27,7 @@ for (const fragment of [
 	"/aws/lambda/github-account-info-ai-ops-investigator",
 	"Review before execution",
 	"AI_OPS_GITHUB_MODELS_TOKEN",
+	"AI Ops Lambda bundles import successfully",
 ]) {
 	if (!workflow.includes(fragment)) {
 		throw new Error(`AI Ops workflow is missing safety boundary: ${fragment}`);
