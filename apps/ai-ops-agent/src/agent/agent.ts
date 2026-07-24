@@ -17,13 +17,32 @@ import { INVESTIGATOR_INSTRUCTIONS } from "./instructions";
 const conclusionSchema = z
 	.object({
 		summary: z.string().min(1).max(1_500),
-		severity: z.enum(["low", "medium", "high", "critical"]),
+		severity: z.enum(["none", "low", "medium", "high", "critical"]),
 		rootCause: z.string().min(1).max(1_500).nullable(),
 		confidence: z.number().min(0).max(1),
 		hypotheses: z.array(hypothesisSchema).min(1).max(6),
-		recommendations: z.array(recommendationSchema).max(8),
+		recommendations: z
+			.array(
+				recommendationSchema.extend({
+					risk: z.enum(["none", "low", "medium", "high"]),
+				}),
+			)
+			.max(8),
 	})
 	.strict();
+
+export function normalizeModelConclusion(
+	conclusion: z.infer<typeof conclusionSchema>,
+) {
+	return {
+		...conclusion,
+		severity: conclusion.severity === "none" ? "low" : conclusion.severity,
+		recommendations: conclusion.recommendations.map((recommendation) => ({
+			...recommendation,
+			risk: recommendation.risk === "none" ? "low" : recommendation.risk,
+		})),
+	};
+}
 
 function isStructuredOutputValidationError(error: unknown): boolean {
 	return (
@@ -97,7 +116,7 @@ export function createMastraInvestigator(
 				});
 			if (!result.object) throw new InvalidModelOutputError();
 			const parsed = investigationSchema.safeParse({
-				...result.object,
+				...normalizeModelConclusion(result.object),
 				schemaVersion: 1,
 				generatedAt: new Date().toISOString(),
 				modelProvider: "github-models",

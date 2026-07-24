@@ -19,5 +19,6 @@ exactly summary, confidence, supportingEvidenceIds, and contradictingEvidenceIds
 Each recommendation must use exactly summary, risk, approvalRequired (always true),
 and remediationType (disable-go-canary, rerun-synthetics, manual-investigation, or
 null). Do not return incidentId, title, component, findings, primaryEvidence, type,
-description, or requiresApproval fields.
+description, or requiresApproval fields. For a healthy system with no detected
+problem, use low severity and low recommendation risk.
 `.trim();

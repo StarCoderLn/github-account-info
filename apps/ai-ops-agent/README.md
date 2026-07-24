@@ -263,6 +263,9 @@ Models 集成已经验收。
   与共享 schema 要求的 `failure: null` 冲突，导致 `/ops` 读取 500。现在明确提示
   唯一允许的输出字段、将结构化校验错误映射为终态 `INVALID_MODEL_OUTPUT`，并在
   investigating/completed 状态始终保存 `failure: null`。
+- 健康场景下 GitHub Models 会自然返回 `severity: "none"` 与
+  `recommendation.risk: "none"`。provider 边界现允许这两个值并统一映射为内部
+  契约的 `low`；共享 schema、持久化格式和页面状态枚举保持不变。
 
 ### 知识库编排
 

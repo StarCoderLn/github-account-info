@@ -9,6 +9,7 @@ import type { SQSEvent } from "aws-lambda";
 
 import {
 	InvalidModelOutputError,
+	normalizeModelConclusion,
 	type Investigator,
 } from "../agent/agent";
 import type { IncidentRepository } from "../storage/incident-repository";
@@ -80,6 +81,34 @@ function event(body: string): SQSEvent {
 }
 
 describe("investigate handler", () => {
+	it("normalizes provider none values to the internal low severity", () => {
+		const conclusion = normalizeModelConclusion({
+			summary: "No issue detected",
+			severity: "none",
+			rootCause: null,
+			confidence: 1,
+			hypotheses: [
+				{
+					summary: "The service is healthy",
+					confidence: 1,
+					supportingEvidenceIds: ["incident-context"],
+					contradictingEvidenceIds: [],
+				},
+			],
+			recommendations: [
+				{
+					summary: "No action required",
+					risk: "none",
+					approvalRequired: true,
+					remediationType: null,
+				},
+			],
+		});
+
+		assert.equal(conclusion.severity, "low");
+		assert.equal(conclusion.recommendations[0]?.risk, "low");
+	});
+
 	it("completes an incident and acknowledges the record", async () => {
 		let completed = false;
 		const repository: IncidentRepository = {
