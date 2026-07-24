@@ -1,0 +1,231 @@
+name: AI Ops Change Set
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Create a reviewable Change Set or execute one already reviewed
+        required: true
+        type: choice
+        default: create-policy-change-set
+        options:
+          - create-policy-change-set
+          - execute-policy-change-set
+          - create-model-secret
+          - create-agent-change-set
+          - execute-agent-change-set
+      change_set_name:
+        description: Required only for an execute operation
+        required: false
+        type: string
+      ai_model:
+        description: GitHub Models catalog ID with tool-calling support
+        required: true
+        default: openai/gpt-4.1
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  change-set:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::879980498268:role/github-actions-deployer
+          aws-region: us-east-2
+
+      - name: Verify non-root deployment identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity_arn="$(aws sts get-caller-identity --query Arn --output text)"
+          if [[ "$identity_arn" != *":assumed-role/github-actions-deployer/"* ]]; then
+            echo "Unexpected deployment identity: $identity_arn" >&2
+            exit 1
+          fi
+
+      - name: Create deployer policy Change Set
+        if: inputs.operation == 'create-policy-change-set'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stack_name="github-account-info-ai-ops-deployer-policy"
+          change_set_name="ai-ops-policy-${GITHUB_RUN_ID}"
+          if aws cloudformation describe-stacks --stack-name "$stack_name" >/dev/null 2>&1; then
+            change_set_type="UPDATE"
+          else
+            change_set_type="CREATE"
+          fi
+          aws cloudformation create-change-set \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name" \
+            --change-set-type "$change_set_type" \
+            --template-body file://infra/ai-ops-deployer-policy.yaml \
+            --capabilities CAPABILITY_NAMED_IAM
+          aws cloudformation wait change-set-create-complete \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name"
+          aws cloudformation describe-change-set \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name" \
+            --query '{Status:Status,ExecutionStatus:ExecutionStatus,Changes:Changes[].ResourceChange.{Action:Action,LogicalId:LogicalResourceId,Type:ResourceType,Replacement:Replacement}}'
+          echo "### Review before execution" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Stack: \`$stack_name\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Change Set: \`$change_set_name\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Execute reviewed deployer policy Change Set
+        if: inputs.operation == 'execute-policy-change-set'
+        shell: bash
+        env:
+          CHANGE_SET_NAME: ${{ inputs.change_set_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CHANGE_SET_NAME" ]]; then
+            echo "change_set_name is required" >&2
+            exit 1
+          fi
+          aws cloudformation execute-change-set \
+            --stack-name github-account-info-ai-ops-deployer-policy \
+            --change-set-name "$CHANGE_SET_NAME"
+
+      - name: Create or update GitHub Models Secret
+        if: inputs.operation == 'create-model-secret'
+        shell: bash
+        env:
+          GITHUB_MODELS_TOKEN: ${{ secrets.AI_OPS_GITHUB_MODELS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GITHUB_MODELS_TOKEN" ]]; then
+            echo "Repository secret AI_OPS_GITHUB_MODELS_TOKEN is required" >&2
+            exit 1
+          fi
+          secret_name="github-account-info/ai-ops/github-models-token"
+          if aws secretsmanager describe-secret --secret-id "$secret_name" >/dev/null 2>&1; then
+            aws secretsmanager put-secret-value \
+              --secret-id "$secret_name" \
+              --secret-string "$GITHUB_MODELS_TOKEN" >/dev/null
+            action="updated"
+          else
+            aws secretsmanager create-secret \
+              --name "$secret_name" \
+              --description "GitHub Models token for github-account-info AI Ops" \
+              --secret-string "$GITHUB_MODELS_TOKEN" \
+              --tags Key=Project,Value=github-account-info Key=ManagedBy,Value=github-actions >/dev/null
+            action="created"
+          fi
+          echo "GitHub Models Secret $action; value was not printed." >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: pnpm/action-setup@v6
+        if: inputs.operation == 'create-agent-change-set'
+        with:
+          version: 10.24.0
+
+      - uses: actions/setup-node@v7
+        if: inputs.operation == 'create-agent-change-set'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: aws-actions/setup-sam@v3
+        if: inputs.operation == 'create-agent-change-set'
+
+      - name: Build and package Agent
+        if: inputs.operation == 'create-agent-change-set'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm --filter ai-ops-agent check-types
+          pnpm --filter ai-ops-agent test
+          pnpm --filter ai-ops-agent build
+          sam validate --template-file infra/ai-ops.yaml --lint
+          sam package \
+            --template-file infra/ai-ops.yaml \
+            --resolve-s3 \
+            --s3-prefix github-account-info-ai-ops \
+            --output-template-file /tmp/ai-ops-packaged.yaml
+
+      - name: Create Agent Change Set
+        if: inputs.operation == 'create-agent-change-set'
+        shell: bash
+        env:
+          AI_MODEL: ${{ inputs.ai_model }}
+        run: |
+          set -euo pipefail
+          github_models_secret_arn="$(aws secretsmanager describe-secret \
+            --secret-id github-account-info/ai-ops/github-models-token \
+            --query ARN \
+            --output text)"
+          profile_queue_url="$(aws cloudformation describe-stacks \
+            --stack-name github-account-info-profile-events \
+            --query "Stacks[0].Outputs[?OutputKey=='ProfileEventsQueueUrl'].OutputValue" \
+            --output text)"
+          profile_dlq_url="$(aws cloudformation describe-stacks \
+            --stack-name github-account-info-profile-events \
+            --query "Stacks[0].Outputs[?OutputKey=='ProfileEventsDeadLetterQueueUrl'].OutputValue" \
+            --output text)"
+          profile_queue_arn="$(aws sqs get-queue-attributes \
+            --queue-url "$profile_queue_url" \
+            --attribute-names QueueArn \
+            --query Attributes.QueueArn \
+            --output text)"
+          profile_dlq_arn="$(aws sqs get-queue-attributes \
+            --queue-url "$profile_dlq_url" \
+            --attribute-names QueueArn \
+            --query Attributes.QueueArn \
+            --output text)"
+          stack_name="github-account-info-ai-ops"
+          change_set_name="ai-ops-agent-${GITHUB_RUN_ID}"
+          if aws cloudformation describe-stacks --stack-name "$stack_name" >/dev/null 2>&1; then
+            change_set_type="UPDATE"
+          else
+            change_set_type="CREATE"
+          fi
+          aws cloudformation create-change-set \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name" \
+            --change-set-type "$change_set_type" \
+            --template-body file:///tmp/ai-ops-packaged.yaml \
+            --capabilities CAPABILITY_IAM \
+            --parameters \
+              ParameterKey=GitHubModelsSecretArn,ParameterValue="$github_models_secret_arn" \
+              ParameterKey=AiModel,ParameterValue="$AI_MODEL" \
+              ParameterKey=NodeApiLogGroup,ParameterValue=/aws/lambda/github-account-info-api \
+              ParameterKey=GoApiLogGroup,ParameterValue=/ecs/github-account-info-go \
+              ParameterKey=ProfileConsumerLogGroup,ParameterValue=/aws/lambda/github-account-info-profile-event-consumer \
+              ParameterKey=ProfileEventsQueueUrl,ParameterValue="$profile_queue_url" \
+              ParameterKey=ProfileEventsQueueArn,ParameterValue="$profile_queue_arn" \
+              ParameterKey=ProfileEventsDeadLetterQueueUrl,ParameterValue="$profile_dlq_url" \
+              ParameterKey=ProfileEventsDeadLetterQueueArn,ParameterValue="$profile_dlq_arn"
+          aws cloudformation wait change-set-create-complete \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name"
+          aws cloudformation describe-change-set \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name" \
+            --query '{Status:Status,ExecutionStatus:ExecutionStatus,Changes:Changes[].ResourceChange.{Action:Action,LogicalId:LogicalResourceId,Type:ResourceType,Replacement:Replacement}}'
+          echo "### Review before execution" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Stack: \`$stack_name\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Change Set: \`$change_set_name\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Model: \`$AI_MODEL\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Execute reviewed Agent Change Set
+        if: inputs.operation == 'execute-agent-change-set'
+        shell: bash
+        env:
+          CHANGE_SET_NAME: ${{ inputs.change_set_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CHANGE_SET_NAME" ]]; then
+            echo "change_set_name is required" >&2
+            exit 1
+          fi
+          aws cloudformation execute-change-set \
+            --stack-name github-account-info-ai-ops \
+            --change-set-name "$CHANGE_SET_NAME"

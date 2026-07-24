@@ -68,6 +68,23 @@ Parameters:
     # 留空时既不注入有效 publisher，也不创建 IAM policy，便于本地/分阶段部署。
     AllowedPattern: "^$|^arn:(aws|aws-us-gov|aws-cn):sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$"
     Description: Optional SNS topic for credential-free introduction.ready events.
+  AiOpsIncidentTableName:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[A-Za-z0-9_.-]{3,255}$"
+    Description: Optional DynamoDB table created by infra/ai-ops.yaml.
+  AiOpsIncidentTableArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:(aws|aws-us-gov|aws-cn):dynamodb:[a-z0-9-]+:[0-9]{12}:table/[A-Za-z0-9_.-]+$"
+  AiOpsQueueUrl:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^https://sqs\\.[a-z0-9-]+\\.amazonaws\\.com/[0-9]{12}/[A-Za-z0-9_-]+$"
+  AiOpsQueueArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:(aws|aws-us-gov|aws-cn):sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$"
   LambdaSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
     Default: subnet-0271ef8002e00346a
@@ -95,6 +112,12 @@ Conditions:
     - !Equals
       - !Ref ProfileEventsTopicArn
       - ""
+  HasAiOps:
+    !And
+      - !Not [!Equals [!Ref AiOpsIncidentTableName, ""]]
+      - !Not [!Equals [!Ref AiOpsIncidentTableArn, ""]]
+      - !Not [!Equals [!Ref AiOpsQueueUrl, ""]]
+      - !Not [!Equals [!Ref AiOpsQueueArn, ""]]
 
 Resources:
   # Node/tRPC Lambda。AWS::Serverless::Function 是 SAM 简写，SAM 会为它
@@ -114,6 +137,8 @@ Resources:
           CORS_ORIGIN: !Ref CorsOrigin
           GO_API_INTERNAL_URL: !Ref GoApiInternalUrl
           PROFILE_EVENTS_TOPIC_ARN: !Ref ProfileEventsTopicArn
+          AI_OPS_INCIDENT_TABLE: !Ref AiOpsIncidentTableName
+          AI_OPS_QUEUE_URL: !Ref AiOpsQueueUrl
           # Preserve the existing unauthenticated production management flow.
           # This is an explicit compatibility choice; CORS is not authentication.
           MANAGEMENT_API_ENABLED: "true"
@@ -135,6 +160,31 @@ Resources:
             Effect: Allow
             Action: sns:Publish
             Resource: !Ref ProfileEventsTopicArn
+
+  ApiAiOpsPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasAiOps
+    Properties:
+      PolicyName: access-ai-ops-incidents
+      Roles:
+        - !Ref ApiFunctionRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadWriteConfiguredIncidentTable
+            Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:Query
+            Resource:
+              - !Ref AiOpsIncidentTableArn
+              - !Sub ${AiOpsIncidentTableArn}/index/by-created-at
+          - Sid: SendConfiguredInvestigationQueue
+            Effect: Allow
+            Action: sqs:SendMessage
+            Resource: !Ref AiOpsQueueArn
 
   # 保留旧版隐式 SAM HttpApi 生成的逻辑 ID，使 CloudFormation 能原地更新
   # 已有 API，而不是悄悄创建第二个公网入口。部署前仍要在 Change Set 中

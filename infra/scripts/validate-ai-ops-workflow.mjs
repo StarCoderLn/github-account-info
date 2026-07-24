@@ -1,0 +1,32 @@
+import { readFileSync } from "node:fs";
+
+const workflow = readFileSync(
+	new URL("../../.github/workflows/ai-ops-change-set.yml", import.meta.url),
+	"utf8",
+);
+
+for (const fragment of [
+	"workflow_dispatch:",
+	"id-token: write",
+	"assumed-role/github-actions-deployer/",
+	"create-policy-change-set",
+	"execute-policy-change-set",
+	"create-model-secret",
+	"create-agent-change-set",
+	"execute-agent-change-set",
+	"--change-set-type",
+	"Review before execution",
+	"AI_OPS_GITHUB_MODELS_TOKEN",
+]) {
+	if (!workflow.includes(fragment)) {
+		throw new Error(`AI Ops workflow is missing safety boundary: ${fragment}`);
+	}
+}
+
+for (const forbidden of ["push:", "pull_request:", "sam deploy", "--no-confirm-changeset"]) {
+	if (workflow.includes(forbidden)) {
+		throw new Error(`AI Ops workflow must remain manual/change-set only: ${forbidden}`);
+	}
+}
+
+console.log("AI Ops manual Change Set workflow validated");

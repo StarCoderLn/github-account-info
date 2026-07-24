@@ -1,0 +1,10 @@
+[
+  { "ParameterKey": "GitHubModelsSecretArn", "ParameterValue": "arn:aws:secretsmanager:us-east-2:123456789012:secret:github-models-token" },
+  { "ParameterKey": "AiModel", "ParameterValue": "openai/gpt-4.1" },
+  { "ParameterKey": "NodeApiLogGroup", "ParameterValue": "/aws/lambda/github-account-info-api" },
+  { "ParameterKey": "GoApiLogGroup", "ParameterValue": "/ecs/github-account-info-go" },
+  { "ParameterKey": "ProfileEventsQueueUrl", "ParameterValue": "https://sqs.us-east-2.amazonaws.com/123456789012/github-account-info-profile-events" },
+  { "ParameterKey": "ProfileEventsQueueArn", "ParameterValue": "arn:aws:sqs:us-east-2:123456789012:github-account-info-profile-events" },
+  { "ParameterKey": "ProfileEventsDeadLetterQueueUrl", "ParameterValue": "https://sqs.us-east-2.amazonaws.com/123456789012/github-account-info-profile-events-dlq" },
+  { "ParameterKey": "ProfileEventsDeadLetterQueueArn", "ParameterValue": "arn:aws:sqs:us-east-2:123456789012:github-account-info-profile-events-dlq" }
+]

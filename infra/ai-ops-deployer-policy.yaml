@@ -1,0 +1,122 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Supplemental least-privilege policy for the existing GitHub Actions OIDC role
+  to deploy only the github-account-info AI Ops DynamoDB, SQS, Logs,
+  CloudWatch Alarm, and EventBridge resources.
+
+Parameters:
+  DeploymentRoleName:
+    Type: String
+    Default: github-actions-deployer
+    AllowedPattern: "^[A-Za-z0-9+=,.@_-]{1,64}$"
+  ProjectName:
+    Type: String
+    Default: github-account-info
+    AllowedPattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+
+Resources:
+  AiOpsDeployPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${ProjectName}-ai-ops-deploy
+      Description: Deploys only the project-scoped AI Ops persistence and event resources.
+      Roles:
+        - !Ref DeploymentRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ManageAiOpsTable
+            Effect: Allow
+            Action:
+              - dynamodb:CreateTable
+              - dynamodb:DeleteTable
+              - dynamodb:DescribeContinuousBackups
+              - dynamodb:DescribeTable
+              - dynamodb:DescribeTimeToLive
+              - dynamodb:ListTagsOfResource
+              - dynamodb:TagResource
+              - dynamodb:UntagResource
+              - dynamodb:UpdateContinuousBackups
+              - dynamodb:UpdateTable
+              - dynamodb:UpdateTimeToLive
+            Resource:
+              - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ProjectName}-ai-ops-incidents
+              - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ProjectName}-ai-ops-incidents/index/*
+          - Sid: ListDynamoTablesForDeployment
+            Effect: Allow
+            Action: dynamodb:ListTables
+            Resource: "*"
+          - Sid: ManageAiOpsQueues
+            Effect: Allow
+            Action:
+              - sqs:CreateQueue
+              - sqs:DeleteQueue
+              - sqs:GetQueueAttributes
+              - sqs:GetQueueUrl
+              - sqs:ListQueueTags
+              - sqs:SetQueueAttributes
+              - sqs:TagQueue
+              - sqs:UntagQueue
+            Resource:
+              - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ProjectName}-ai-ops
+              - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ProjectName}-ai-ops-dlq
+          - Sid: ListQueuesForDeployment
+            Effect: Allow
+            Action: sqs:ListQueues
+            Resource: "*"
+          - Sid: ManageAiOpsLogGroups
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:DeleteRetentionPolicy
+              - logs:DescribeLogGroups
+              - logs:ListTagsForResource
+              - logs:PutRetentionPolicy
+              - logs:TagResource
+              - logs:UntagResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-ai-ops-alarm-ingest
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-ai-ops-investigator
+          - Sid: ManageAiOpsAlarms
+            Effect: Allow
+            Action:
+              - cloudwatch:DeleteAlarms
+              - cloudwatch:ListTagsForResource
+              - cloudwatch:PutMetricAlarm
+              - cloudwatch:TagResource
+              - cloudwatch:UntagResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ProjectName}-ai-ops-dlq-not-empty
+              - !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ProjectName}-ai-ops-oldest-message
+          - Sid: DescribeAlarmsForDeployment
+            Effect: Allow
+            Action: cloudwatch:DescribeAlarms
+            Resource: "*"
+          - Sid: ManageAiOpsEventRules
+            Effect: Allow
+            Action:
+              - events:DeleteRule
+              - events:DescribeRule
+              - events:ListTagsForResource
+              - events:ListTargetsByRule
+              - events:PutRule
+              - events:PutTargets
+              - events:RemoveTargets
+              - events:TagResource
+              - events:UntagResource
+            Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${ProjectName}-ai-ops-*
+          - Sid: ManageGitHubModelsSecret
+            Effect: Allow
+            Action:
+              - secretsmanager:CreateSecret
+              - secretsmanager:DescribeSecret
+              - secretsmanager:ListSecretVersionIds
+              - secretsmanager:PutSecretValue
+              - secretsmanager:TagResource
+            Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}/ai-ops/github-models-token-*
+
+Outputs:
+  ManagedPolicyArn:
+    Value: !Ref AiOpsDeployPolicy
+  AttachedRoleName:
+    Value: !Ref DeploymentRoleName

@@ -13,7 +13,11 @@
 		"test": "tsx --test src/**/*.test.ts"
 	},
 	"dependencies": {
+		"@aws-sdk/client-dynamodb": "^3.1094.0",
 		"@aws-sdk/client-sns": "^3.1092.0",
+		"@aws-sdk/client-sqs": "^3.1094.0",
+		"@aws-sdk/lib-dynamodb": "^3.1094.0",
+		"@github-account-info/ai-ops-schema": "workspace:*",
 		"@github-account-info/db": "workspace:*",
 		"@github-account-info/env": "workspace:*",
 		"@github-account-info/events": "workspace:*",

@@ -14,6 +14,16 @@ export const env = createEnv({
 				/^arn:(aws|aws-us-gov|aws-cn):sns:[a-z0-9-]+:\d{12}:[A-Za-z0-9_-]+$/,
 			)
 			.optional(),
+		AI_OPS_INCIDENT_TABLE: z
+			.string()
+			.regex(/^[A-Za-z0-9_.-]{3,255}$/)
+			.optional(),
+		AI_OPS_QUEUE_URL: z
+			.url()
+			.refine((value) => value.startsWith("https://sqs."), {
+				message: "AI_OPS_QUEUE_URL must be an AWS SQS HTTPS URL",
+			})
+			.optional(),
 		MANAGEMENT_API_ENABLED: z
 			.enum(["true", "false"])
 			.transform((value) => value === "true")

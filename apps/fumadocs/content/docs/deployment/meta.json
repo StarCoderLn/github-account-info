@@ -1,5 +1,12 @@
 {
   "title": "部署与运维",
   "icon": "CloudCog",
-  "pages": ["index", "architecture-gallery", "operations-reliability", "node-lambda", "go-service"]
+  "pages": [
+    "index",
+    "architecture-gallery",
+    "node-lambda",
+    "go-service",
+    "operations-reliability",
+    "ai-ops-agent"
+  ]
 }
