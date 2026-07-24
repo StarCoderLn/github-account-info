@@ -14,7 +14,11 @@ for (const fragment of [
 	"create-model-secret",
 	"create-agent-change-set",
 	"execute-agent-change-set",
+	"delete-failed-agent-stack",
 	"--change-set-type",
+	"stack-create-complete",
+	"stack-update-complete",
+	"ROLLBACK_COMPLETE",
 	"Review before execution",
 	"AI_OPS_GITHUB_MODELS_TOKEN",
 ]) {

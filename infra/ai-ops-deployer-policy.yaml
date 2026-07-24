@@ -82,7 +82,9 @@ Resources:
               - logs:UntagResource
             Resource:
               - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-ai-ops-alarm-ingest
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-ai-ops-alarm-ingest:*
               - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-ai-ops-investigator
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-ai-ops-investigator:*
           - Sid: ManageAiOpsAlarms
             Effect: Allow
             Action:

@@ -213,6 +213,12 @@ Models 集成已经验收。
 - 修复只为 `${ProjectName}-profile-events` 与
   `${ProjectName}-profile-events-dlq` 增加 `sqs:GetQueueAttributes`，不授予发送、
   接收、删除消息或修改队列的权限。
+- 补齐队列读取权限后 Change Set 创建成功；首次执行时 CloudFormation 因日志组
+  ARN 未覆盖 `:log-stream:` 子资源形式而回滚。GitHub Actions 当时未等待 stack
+  完成，曾错误显示 Success。
+- 后续修复为两个固定 AI Ops Log Group 同时声明精确 ARN 与 `:*` ARN，并让
+  Change Set 执行操作等待 stack 最终状态；新增的失败栈清理操作只接受
+  `ROLLBACK_COMPLETE` 或 `CREATE_FAILED`，不能删除健康栈。
 
 ### 知识库编排
 
