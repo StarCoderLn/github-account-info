@@ -156,6 +156,13 @@ jobs:
           pnpm --filter ai-ops-agent check-types
           pnpm --filter ai-ops-agent test
           pnpm --filter ai-ops-agent build
+          node --input-type=module -e "
+            await Promise.all([
+              import('./apps/ai-ops-agent/dist/investigate.mjs'),
+              import('./apps/ai-ops-agent/dist/alarm-ingest.mjs'),
+            ]);
+            console.log('AI Ops Lambda bundles import successfully');
+          "
           sam validate --template-file infra/ai-ops.yaml --lint
           sam package \
             --template-file infra/ai-ops.yaml \

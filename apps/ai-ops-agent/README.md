@@ -252,6 +252,11 @@ Models 集成已经验收。
   `ops.list` 返回 `{ items: [], nextCursor: null }`，证明页面读取链路已经接通。
   Node role 的 `access-ai-ops-incidents` inline policy 只包含目标表/索引的
   `GetItem`、`PutItem`、`UpdateItem`、`Query` 和目标队列的 `SendMessage`。
+- 首次受控手工调查证明 API、DynamoDB、SQS 和 event source mapping 已接通，但
+  Investigator 冷启动在加载 bundle 时因顶层 `createRequire` 重复声明而失败，
+  尚未调用 GitHub Models。原因是 esbuild banner 和被打包依赖都声明了同名
+  import。banner 现改用私有别名 `__createRequire`；创建 Change Set 前还会在
+  Node 22 中直接 import 两个最终 `.mjs` 产物，语法或模块初始化失败将阻止部署。
 
 ### 知识库编排
 
