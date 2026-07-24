@@ -84,7 +84,8 @@ tool calling 的公开 model ID。先创建 AI Ops change set 并审查，执行
 `AiOps*` 参数。四个参数默认均为空，因此在接入前不会改变现有 API 行为。
 
 AI Ops 的 DynamoDB、两条 SQS 队列和 Lambda 均按使用量计费；GitHub Models 免费
-额度有频率限制。Agent reserved concurrency 固定为 1，单次最多 4 个模型 step 和
+额度有频率限制。Agent 不占用账号 reserved concurrency，SQS event source 的
+`MaximumConcurrency` 固定为 2、`BatchSize` 固定为 1；单次最多 4 个模型 step 和
 6 次工具调用，429/5xx 由 SQS 重试。
 
 当前推荐模型是 `openai/gpt-4.1`，GitHub catalog 明确标注其支持 tool calling。
