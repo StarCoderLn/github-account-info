@@ -14,6 +14,7 @@ on:
           - create-model-secret
           - create-agent-change-set
           - execute-agent-change-set
+          - delete-failed-agent-stack
       change_set_name:
         description: Required only for an execute operation
         required: false
@@ -90,9 +91,21 @@ jobs:
             echo "change_set_name is required" >&2
             exit 1
           fi
+          change_set_type="$(aws cloudformation describe-change-set \
+            --stack-name github-account-info-ai-ops-deployer-policy \
+            --change-set-name "$CHANGE_SET_NAME" \
+            --query ChangeSetType \
+            --output text)"
           aws cloudformation execute-change-set \
             --stack-name github-account-info-ai-ops-deployer-policy \
             --change-set-name "$CHANGE_SET_NAME"
+          if [[ "$change_set_type" == "CREATE" ]]; then
+            aws cloudformation wait stack-create-complete \
+              --stack-name github-account-info-ai-ops-deployer-policy
+          else
+            aws cloudformation wait stack-update-complete \
+              --stack-name github-account-info-ai-ops-deployer-policy
+          fi
 
       - name: Create or update GitHub Models Secret
         if: inputs.operation == 'create-model-secret'
@@ -226,6 +239,35 @@ jobs:
             echo "change_set_name is required" >&2
             exit 1
           fi
+          change_set_type="$(aws cloudformation describe-change-set \
+            --stack-name github-account-info-ai-ops \
+            --change-set-name "$CHANGE_SET_NAME" \
+            --query ChangeSetType \
+            --output text)"
           aws cloudformation execute-change-set \
             --stack-name github-account-info-ai-ops \
             --change-set-name "$CHANGE_SET_NAME"
+          if [[ "$change_set_type" == "CREATE" ]]; then
+            aws cloudformation wait stack-create-complete \
+              --stack-name github-account-info-ai-ops
+          else
+            aws cloudformation wait stack-update-complete \
+              --stack-name github-account-info-ai-ops
+          fi
+
+      - name: Delete failed Agent Stack
+        if: inputs.operation == 'delete-failed-agent-stack'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stack_name="github-account-info-ai-ops"
+          stack_status="$(aws cloudformation describe-stacks \
+            --stack-name "$stack_name" \
+            --query "Stacks[0].StackStatus" \
+            --output text)"
+          if [[ "$stack_status" != "ROLLBACK_COMPLETE" && "$stack_status" != "CREATE_FAILED" ]]; then
+            echo "Refusing to delete stack in status: $stack_status" >&2
+            exit 1
+          fi
+          aws cloudformation delete-stack --stack-name "$stack_name"
+          aws cloudformation wait stack-delete-complete --stack-name "$stack_name"
