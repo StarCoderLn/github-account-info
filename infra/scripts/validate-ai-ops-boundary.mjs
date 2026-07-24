@@ -12,7 +12,8 @@ const requiredFragments = [
 	"sqs:GetQueueAttributes",
 	"cloudwatch:DescribeAlarms",
 	"cloudformation:DescribeStackEvents",
-	"ReservedConcurrentExecutions: 1",
+	"BatchSize: 1",
+	"MaximumConcurrency: 2",
 	"PointInTimeRecoveryEnabled: true",
 	"TimeToLiveSpecification:",
 	"ReportBatchItemFailures",
@@ -45,6 +46,12 @@ for (const action of forbiddenActions) {
 
 if (/GITHUB_MODELS_TOKEN|github_pat_|ghp_/.test(template)) {
 	throw new Error("AI Ops template contains a token-like value");
+}
+
+if (template.includes("ReservedConcurrentExecutions:")) {
+	throw new Error(
+		"AI Ops template must preserve the account unreserved concurrency pool",
+	);
 }
 
 console.log("AI Ops static security boundaries validated");

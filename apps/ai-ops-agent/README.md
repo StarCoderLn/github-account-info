@@ -219,6 +219,10 @@ Models 集成已经验收。
 - 后续修复为两个固定 AI Ops Log Group 同时声明精确 ARN 与 `:*` ARN，并让
   Change Set 执行操作等待 stack 最终状态；新增的失败栈清理操作只接受
   `ROLLBACK_COMPLETE` 或 `CREATE_FAILED`，不能删除健康栈。
+- 第二次创建通过日志组阶段后，账号因 Lambda reserved concurrency 会让
+  unreserved concurrency 低于 AWS 最小值 10 而再次回滚。最终设计移除函数级
+  reserved concurrency，改用 SQS event source 的 `MaximumConcurrency: 2` 与
+  `BatchSize: 1` 控制调查吞吐，避免占用账号预留并发池。
 
 ### 知识库编排
 

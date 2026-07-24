@@ -41,7 +41,8 @@ Node Lambda 与 Go ECS 灰度发布。Feature 6 不再创建一套新的监控�
 - [ ] F-010：调查输出至少包含摘要、严重度、根因、可信度、证据、矛盾证据和
   建议动作；所有输出必须通过共享 schema 校验。
 - [ ] F-011：模型限额必须固定：单次调查最多四次模型请求、六次工具调用；
-  Agent Lambda reserved concurrency 默认不超过 1。
+  Agent Lambda 不占用账号 reserved concurrency；SQS event source 的
+  `MaximumConcurrency` 固定为 2、`BatchSize` 固定为 1。
 - [ ] F-012：GitHub Models 429/5xx、工具暂时失败和 Lambda 超时必须保留为可重试
   失败；schema 无效、事件非法等永久错误必须记录后确认消费，避免毒消息循环。
 - [ ] F-013：前端 `/ops` 页面必须显示调查列表、状态、证据、根因、可信度和建议，
