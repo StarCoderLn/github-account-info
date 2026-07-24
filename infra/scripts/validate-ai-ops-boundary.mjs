@@ -14,6 +14,7 @@ const requiredFragments = [
 	"cloudformation:DescribeStackEvents",
 	"BatchSize: 1",
 	"MaximumConcurrency: 2",
+	"RuleName: !Sub ${ProjectName}-ai-ops-cloudwatch-alarms",
 	"PointInTimeRecoveryEnabled: true",
 	"TimeToLiveSpecification:",
 	"ReportBatchItemFailures",
