@@ -120,7 +120,9 @@ AI Ops Stack，不使用账号 root 凭证。
    再创建待审 Agent Change Set。
 5. 审查资源、IAM 和费用后，运行 `execute-agent-change-set`。
 6. 只有首次创建失败且 stack 处于 `ROLLBACK_COMPLETE` 或 `CREATE_FAILED` 时，
-   才能运行 `delete-failed-agent-stack`；该操作会拒绝删除健康 stack。
+   才能运行 `delete-failed-agent-stack`；该操作会拒绝删除健康 stack，并在 stack
+   删除完成后精确清理因 `DeletionPolicy: Retain` 遗留的 AI Ops 事件表和两个
+   Lambda 日志组，不删除模型 Secret、部署策略栈或其他项目资源。
 
 执行操作与创建 Change Set 是两个独立的手工选择，不存在 push 自动部署路径。
 

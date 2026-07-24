@@ -19,6 +19,11 @@ for (const fragment of [
 	"stack-create-complete",
 	"stack-update-complete",
 	"ROLLBACK_COMPLETE",
+	"aws dynamodb delete-table --table-name \"$table_name\"",
+	"aws logs delete-log-group --log-group-name \"$log_group\"",
+	"github-account-info-ai-ops-incidents",
+	"/aws/lambda/github-account-info-ai-ops-alarm-ingest",
+	"/aws/lambda/github-account-info-ai-ops-investigator",
 	"Review before execution",
 	"AI_OPS_GITHUB_MODELS_TOKEN",
 ]) {
