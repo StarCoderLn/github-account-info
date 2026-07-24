@@ -35,6 +35,18 @@ export function loadOpsServiceConfig(
 	return { tableName, queueUrl };
 }
 
+export function parseStoredOpsIncident(
+	item: Record<string, unknown>,
+): OpsIncident {
+	// Records created before failure became an explicit nullable field omit it in
+	// DynamoDB. Normalize only that known legacy shape; malformed values still fail
+	// strict schema validation.
+	return incidentSchema.parse({
+		...item,
+		failure: item.failure ?? null,
+	});
+}
+
 export class OpsIncidentService {
 	constructor(
 		private readonly config: OpsServiceConfig,
@@ -64,7 +76,7 @@ export class OpsIncidentService {
 			}),
 		);
 		return {
-			items: (result.Items ?? []).map((item) => incidentSchema.parse(item)),
+			items: (result.Items ?? []).map(parseStoredOpsIncident),
 			nextCursor: result.LastEvaluatedKey
 				? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString(
 						"base64url",
@@ -80,7 +92,7 @@ export class OpsIncidentService {
 				Key: { incidentId },
 			}),
 		);
-		return result.Item ? incidentSchema.parse(result.Item) : null;
+		return result.Item ? parseStoredOpsIncident(result.Item) : null;
 	}
 
 	async create(input: CreateManualIncidentInput): Promise<OpsIncident> {
