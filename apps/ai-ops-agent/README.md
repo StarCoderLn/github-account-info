@@ -272,6 +272,15 @@ Models 集成已经验收。
   `openai/gpt-4.1`，`severity: low`、`rootCause: null`、`confidence: 1`，
   evidence 同时包含 CloudWatch 告警、CloudFormation 部署事件和脱敏日志，
   recommendation 保持 `approvalRequired: true`，最终 `failure: null`。
+- `/ops` 页面后续统一命名为 `AI Ops Agent`，并从普通表单/结果面板改成
+  “示例问题 → 调查对象与现象 → Agent 进度 → 结论、证据和建议”的工作台。
+  调查记录使用固定高度和内部滚动，空状态与工作台等高，加载骨架不会再改变外层
+  卡片高度。
+- 本地只启动 Web 时，通过 `LOCAL_API_PROXY_TARGET` 让 Vite `/api` 代理到已部署
+  的 Node API；浏览器不直接跨域，也不会继承本机 root AWS 凭证。真实事件仍由
+  线上 Node Lambda 的项目限定角色读写。早期测试记录缺少 nullable `failure`
+  字段时，API 在 DynamoDB 读取边界仅把该已知旧形态归一化为 `null`，其他非法值
+  继续由共享 schema 拒绝，避免一条旧记录拖垮整个 `ops.list`。
 
 ### 知识库编排
 

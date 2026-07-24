@@ -61,25 +61,11 @@ icon: Images
 
 **适合回答：告警如何转成只读调查，模型能够读取哪些证据，结论保存在哪里？**
 
-```mermaid
-flowchart LR
-  Alarm[CloudWatch Alarm] --> EventBridge[EventBridge]
-  EventBridge --> Ingest[alarm-ingest Lambda]
-  Ingest --> Table[(DynamoDB incidents)]
-  Ingest --> Queue[SQS investigation queue]
-  Queue --> Agent[investigator Lambda]
-  Agent --> Models[GitHub Models]
-  Agent --> Logs[CloudWatch Logs]
-  Agent --> Metrics[CloudWatch Alarms]
-  Agent --> Stacks[CloudFormation events]
-  Agent --> Queues[SQS attributes]
-  Agent --> Table
-  Table --> API[Node tRPC ops API]
-  API --> Page["/ops investigation page"]
-```
+![github-account-info AI Ops Agent 智能运维架构](./ai-ops-agent/assets/ai-ops-agent-architecture.png)
 
 第一版 Agent 只有调查权限，没有 ECS、Lambda、CloudFormation 或 SQS 修复写权限。
-云端尚未部署和完成真实链路验收，不能把本图当作已上线证明。
+图中同时标出了现有生产服务、可观测性证据、Mastra 调查编排、GitHub Models
+适配层、人工确认闭环，以及 GitHub Actions OIDC 和最小权限安全边界。
 
 ## 怎么选择要看的图
 

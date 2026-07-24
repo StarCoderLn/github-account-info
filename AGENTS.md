@@ -63,3 +63,4 @@ Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
 - [F6-L15] Mastra 的 `structuredOutput` 校验可能在 `agent.generate()` 内抛出 `id === "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED"`，不能只在返回后检查 `result.object`。该错误应包装为领域内 `InvalidModelOutputError` 并把事件写成非重试的 `INVALID_MODEL_OUTPUT`；其他 provider/网络错误才进入 SQS partial retry。Prompt 仍需明确列出唯一允许的字段，不能假定 provider 一定严格服从 response schema。
 - [F6-L16] DynamoDB 文档必须持续满足共享 `incidentSchema`，不能为“清空失败”使用 `REMOVE failure`，因为非失败状态的契约也是 `failure: null` 而不是字段缺失。`begin` 和 `complete` 必须显式写 `failure = :null`，否则 investigating/completed 记录会让 `/ops` 的 list/get 在解析时返回 500。
 - [F6-L17] 健康调查时模型可能返回语义合理但不属于内部枚举的 `severity: "none"` / `risk: "none"`。不要为 provider 习惯扩散修改共享 schema 和页面状态；在模型 conclusion 边界接受 `none` 并归一化为内部最低等级 `low`，再执行最终 `investigationSchema` 校验和持久化。
+- [F6-L18] 收紧持久化 schema 后必须兼容已经写入的旧文档：早期 incident 缺少后来新增的 nullable `failure` 字段时，严格解析会让一条旧记录拖垮整个 `ops.list`。应在 DynamoDB 读取边界仅对已知旧形态把缺失字段归一化为 `null`，同时继续拒绝非空的非法值；不要放宽共享 schema，也不要为了修复读取问题用 root 批量改历史数据。
