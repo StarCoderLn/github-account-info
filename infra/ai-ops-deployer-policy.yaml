@@ -74,6 +74,7 @@ Resources:
             Effect: Allow
             Action:
               - logs:CreateLogGroup
+              - logs:DeleteLogGroup
               - logs:DeleteRetentionPolicy
               - logs:DescribeLogGroups
               - logs:ListTagsForResource

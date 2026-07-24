@@ -271,3 +271,21 @@ jobs:
           fi
           aws cloudformation delete-stack --stack-name "$stack_name"
           aws cloudformation wait stack-delete-complete --stack-name "$stack_name"
+
+          table_name="github-account-info-ai-ops-incidents"
+          if aws dynamodb describe-table --table-name "$table_name" >/dev/null 2>&1; then
+            aws dynamodb delete-table --table-name "$table_name"
+            aws dynamodb wait table-not-exists --table-name "$table_name"
+          fi
+
+          for log_group in \
+            "/aws/lambda/github-account-info-ai-ops-alarm-ingest" \
+            "/aws/lambda/github-account-info-ai-ops-investigator"; do
+            existing_log_group="$(aws logs describe-log-groups \
+              --log-group-name-prefix "$log_group" \
+              --query "logGroups[?logGroupName=='$log_group'].logGroupName | [0]" \
+              --output text)"
+            if [[ "$existing_log_group" == "$log_group" ]]; then
+              aws logs delete-log-group --log-group-name "$log_group"
+            fi
+          done

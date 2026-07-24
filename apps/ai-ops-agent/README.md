@@ -223,6 +223,10 @@ Models 集成已经验收。
   unreserved concurrency 低于 AWS 最小值 10 而再次回滚。最终设计移除函数级
   reserved concurrency，改用 SQS event source 的 `MaximumConcurrency: 2` 与
   `BatchSize: 1` 控制调查吞吐，避免占用账号预留并发池。
+- CloudFormation 回滚不会删除带 `DeletionPolicy: Retain` 的事件表和两个固定日志组。
+  `delete-failed-agent-stack` 在失败状态守卫通过并删除 stack 后，只精确删除
+  `github-account-info-ai-ops-incidents` 和两个 AI Ops Lambda 日志组；模型 Secret、
+  部署策略栈及其他业务资源保持不变，避免重建时发生同名冲突。
 
 ### 知识库编排
 
