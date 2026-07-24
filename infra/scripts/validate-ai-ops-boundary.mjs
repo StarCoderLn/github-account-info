@@ -4,6 +4,10 @@ const template = readFileSync(
 	new URL("../ai-ops.yaml", import.meta.url),
 	"utf8",
 );
+const nodeDeploy = readFileSync(
+	new URL("../../apps/server/deploy-canary.sh", import.meta.url),
+	"utf8",
+);
 
 const requiredFragments = [
 	"GitHubModelsSecretArn:",
@@ -53,6 +57,22 @@ if (template.includes("ReservedConcurrentExecutions:")) {
 	throw new Error(
 		"AI Ops template must preserve the account unreserved concurrency pool",
 	);
+}
+
+for (const fragment of [
+	'AI_OPS_STACK_NAME="github-account-info-ai-ops"',
+	"IncidentTableName",
+	"IncidentTableArn",
+	"InvestigationQueueUrl",
+	"InvestigationQueueArn",
+	'AiOpsIncidentTableName="$ai_ops_incident_table"',
+	'AiOpsIncidentTableArn="$ai_ops_incident_table_arn"',
+	'AiOpsQueueUrl="$ai_ops_queue_url"',
+	'AiOpsQueueArn="$ai_ops_queue_arn"',
+]) {
+	if (!nodeDeploy.includes(fragment)) {
+		throw new Error(`Node deploy is missing AI Ops stack wiring: ${fragment}`);
+	}
 }
 
 console.log("AI Ops static security boundaries validated");

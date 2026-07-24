@@ -242,6 +242,10 @@ Models 集成已经验收。
   API 不返回的 `ChangeSetType`，得到 `None` 后错误等待 `stack-update-complete`。
   执行逻辑现改为在执行前读取 stack 状态：`REVIEW_IN_PROGRESS` 使用 create
   waiter，其他可执行状态使用 update waiter。
+- Node Lambda 的 Canary 部署脚本会在部署时读取 AI Ops stack 的四个非敏感输出
+  （事件表 Name/ARN、调查队列 URL/ARN），再传给 server SAM 参数。stack 不存在时
+  保持空参数以兼容旧环境；stack 已存在但输出不完整时直接失败，避免只注入半套
+  配置。Node 执行角色仅获得指定表的读写权限和指定队列的 `SendMessage`。
 
 ### 知识库编排
 
