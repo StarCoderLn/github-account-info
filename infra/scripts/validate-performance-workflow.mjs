@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 
 const workflow = readFileSync(
-	new URL("../../.github/workflows/performance-change-set.yml", import.meta.url),
+	new URL(
+		"../../.github/workflows/performance-change-set.yml",
+		import.meta.url,
+	),
 	"utf8",
 );
 const policy = readFileSync(
@@ -18,6 +21,10 @@ for (const fragment of [
 	"create-runtime-change-set",
 	"execute-runtime-change-set",
 	"push-image",
+	"migrate-database",
+	"PERFORMANCE_PROCESSOR_MODE",
+	"aws ecs run-task",
+	"aws ecs wait tasks-stopped",
 	"The first CREATE must use desired_count=0",
 	"Review before execution",
 	"stack-create-complete",
@@ -27,7 +34,9 @@ for (const fragment of [
 	"docker push",
 ]) {
 	if (!workflow.includes(fragment)) {
-		throw new Error(`Performance workflow is missing safety boundary: ${fragment}`);
+		throw new Error(
+			`Performance workflow is missing safety boundary: ${fragment}`,
+		);
 	}
 }
 
@@ -39,7 +48,9 @@ for (const forbidden of [
 	"aws iam create-access-key",
 ]) {
 	if (workflow.includes(forbidden)) {
-		throw new Error(`Performance workflow contains forbidden action: ${forbidden}`);
+		throw new Error(
+			`Performance workflow contains forbidden action: ${forbidden}`,
+		);
 	}
 }
 
@@ -47,6 +58,8 @@ for (const fragment of [
 	"ManagePerformanceQueues",
 	"ManagePerformanceRepository",
 	"ManagePerformanceEcsService",
+	"RunOnlyPerformanceMigrationTask",
+	"ObserveAndStopOnlyPerformanceTasks",
 	"PassOnlyPerformanceRolesToEcs",
 	"ManagePerformanceLogGroup",
 	"ManagePerformanceAlarms",

@@ -7,6 +7,7 @@ COPY apps/performance-processor/package.json apps/performance-processor/package.
 RUN corepack enable && pnpm install --frozen-lockfile --filter performance-processor...
 COPY packages/config packages/config
 COPY packages/performance-schema packages/performance-schema
+COPY packages/db/src/migrations packages/db/src/migrations
 COPY apps/go-api/certs/us-east-2-bundle.pem apps/go-api/certs/us-east-2-bundle.pem
 COPY apps/performance-processor apps/performance-processor
 RUN pnpm --filter performance-processor build
@@ -15,4 +16,5 @@ FROM gcr.io/distroless/nodejs22-debian12:nonroot
 WORKDIR /app
 COPY --from=build /workspace/apps/performance-processor/dist/index.mjs /app/index.mjs
 COPY --from=build /workspace/apps/go-api/certs/us-east-2-bundle.pem /app/certs/rds-bundle.pem
+COPY --from=build /workspace/packages/db/src/migrations /app/migrations
 CMD ["/app/index.mjs"]

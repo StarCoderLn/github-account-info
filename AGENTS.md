@@ -100,3 +100,8 @@ Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
   和日常闲置都保持 `DesiredCount=0`，仅在验收窗口通过 OIDC + 人工审查 Change
   Set 切到 1，结束后再以 Change Set 恢复 0；禁止直接更新 ECS Service 造成
   CloudFormation drift，也禁止使用本机 root 凭证部署。
+- [F7-L10] 私有 RDS 的生产迁移不能依赖 GitHub-hosted runner 直连，也不能为了
+  省事用本机 root 开 SSM 隧道。复用已审查的 ECS Task Definition，在 private
+  subnet 内运行 `PERFORMANCE_PROCESSOR_MODE=migrate` 一次性 Fargate Task；迁移
+  文件随不可变镜像发布，Secret 只由 ECS 注入，workflow 只等待精确 task 的 exit
+  code，并在失败或取消时停止该 task。

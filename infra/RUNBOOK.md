@@ -183,6 +183,13 @@ processor → CloudWatch/PostgreSQL。排障按层进行：
 6. CloudWatch 有清洗日志但页面为空：检查 `performance_event` 数据时间、environment
    筛选和 Node Lambda 的数据库连接。
 
+生产迁移只通过 `Performance Change Set` workflow 的 `migrate-database` 操作执行。
+该操作复用当前 Task Definition 和 private network，覆盖容器变量为
+`PERFORMANCE_PROCESSOR_MODE=migrate`，运行仓库内全部 Drizzle migration 后退出。
+工作流必须等待 task `STOPPED` 且容器 exit code 为 0；失败或取消时只停止该次
+精确 task。禁止在 GitHub runner 展开数据库 Secret，也禁止用本机 root 凭证开
+SSM 隧道代替正式迁移流程。
+
 只读检查：
 
 ```bash

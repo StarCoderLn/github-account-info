@@ -220,6 +220,9 @@ importers:
       '@github-account-info/performance-schema':
         specifier: workspace:*
         version: link:../../packages/performance-schema
+      drizzle-orm:
+        specifier: ^0.45.1
+        version: 0.45.2(@neondatabase/serverless@1.1.0)(@types/pg@8.20.0)(pg@8.22.0)
       pg:
         specifier: ^8.22.0
         version: 8.22.0

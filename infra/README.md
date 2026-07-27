@@ -144,18 +144,23 @@ Feature 7 使用独立 stack `github-account-info-performance`。首次创建时
 
 1. `create-policy-change-set`：创建仅含一项 managed policy 的待审 Change Set。
 2. 审查后使用 `execute-policy-change-set` 执行，并传入上一步名称。
-3. 运行数据库迁移，确认 `performance_event` 表和三个索引已创建。
-4. `create-runtime-change-set`：创建 performance CREATE Change Set；首次创建
+3. `create-runtime-change-set`：创建 performance CREATE Change Set；首次创建
    workflow 会强制 `DesiredCount=0`。
-5. 审查后使用 `execute-runtime-change-set` 执行。
-6. 使用 `push-image` 构建、测试并推送 `prod-<commit-sha>` 不可变镜像。
-7. 演示前创建并执行 `DesiredCount=1` 的 runtime UPDATE Change Set；记录开始时间。
-8. stack 成功后，Node 发布脚本自动读取 `PerformanceQueueUrl/Arn` 输出并传给
+4. 审查后使用 `execute-runtime-change-set` 执行。
+5. 使用 `push-image` 构建、测试并推送 `prod-<commit-sha>` 不可变镜像。
+6. 若镜像 SHA 与 Task Definition 不同，先创建并执行 `DesiredCount=0` 的 runtime
+   UPDATE Change Set，使一次性任务和 Service 都引用该不可变镜像。
+7. 运行 `migrate-database`。workflow 只在既有 private subnet 中启动一个带
+   `PERFORMANCE_PROCESSOR_MODE=migrate` 的短生命周期 Fargate Task，等待 exit code
+   为 0 后结束；它复用 Task Definition 中的 Secret 和 RDS CA，不向 runner 暴露
+   `DATABASE_URL`。
+8. 演示前创建并执行 `DesiredCount=1` 的 runtime UPDATE Change Set；记录开始时间。
+9. stack 成功后，Node 发布脚本自动读取 `PerformanceQueueUrl/Arn` 输出并传给
    server SAM stack；不存在 performance stack 时两项保持全空。
-9. Cloudflare Pages production 设置
+10. Cloudflare Pages production 设置
    `VITE_PERFORMANCE_ENABLED=true`、`VITE_APP_ENVIRONMENT=production` 和不可变
    `VITE_APP_RELEASE`，再构建 web。
-10. 验收结束立即创建并执行 `DesiredCount=0` 的 runtime UPDATE Change Set，
+11. 验收结束立即创建并执行 `DesiredCount=0` 的 runtime UPDATE Change Set，
     并确认 ECS running count 已回到 0。
 
 浏览器始终只调用 `/api/v1/performance/events`，不接触 Queue URL 或 AWS 凭证。

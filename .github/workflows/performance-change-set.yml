@@ -14,6 +14,7 @@ on:
           - create-runtime-change-set
           - execute-runtime-change-set
           - push-image
+          - migrate-database
       change_set_name:
         description: Required only when executing a reviewed Change Set
         required: false
@@ -38,6 +39,7 @@ permissions:
 jobs:
   change-set:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -240,3 +242,89 @@ jobs:
             --image-ids imageTag="$IMAGE_TAG" \
             --query 'imageDetails[0].{Digest:imageDigest,PushedAt:imagePushedAt,Size:imageSizeInBytes}'
           echo "Pushed \`${repository_uri}:${IMAGE_TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run one-off database migration task
+        if: inputs.operation == 'migrate-database'
+        shell: bash
+        run: |
+          set -euo pipefail
+          readonly cluster_name="github-account-info-go"
+          readonly service_name="github-account-info-performance"
+          task_arn=""
+
+          cleanup() {
+            if [[ -z "$task_arn" ]]; then
+              return
+            fi
+            task_status="$(aws ecs describe-tasks \
+              --cluster "$cluster_name" \
+              --tasks "$task_arn" \
+              --query 'tasks[0].lastStatus' \
+              --output text 2>/dev/null || true)"
+            if [[ "$task_status" == "PENDING" || "$task_status" == "RUNNING" ]]; then
+              aws ecs stop-task \
+                --cluster "$cluster_name" \
+                --task "$task_arn" \
+                --reason "Migration workflow cleanup" >/dev/null
+            fi
+          }
+          trap cleanup EXIT INT TERM
+
+          service_json="$(aws ecs describe-services \
+            --cluster "$cluster_name" \
+            --services "$service_name" \
+            --query 'services[0]' \
+            --output json)"
+          task_definition="$(jq -r '.taskDefinition' <<< "$service_json")"
+          network_configuration="$(jq -c \
+            '{awsvpcConfiguration: .networkConfiguration.awsvpcConfiguration}' \
+            <<< "$service_json")"
+
+          if [[ -z "$task_definition" || "$task_definition" == "null" ]]; then
+            echo "Performance task definition is unavailable" >&2
+            exit 1
+          fi
+
+          task_arn="$(aws ecs run-task \
+            --cluster "$cluster_name" \
+            --task-definition "$task_definition" \
+            --launch-type FARGATE \
+            --count 1 \
+            --started-by "perf-migrate-${GITHUB_RUN_ID}" \
+            --network-configuration "$network_configuration" \
+            --overrides \
+              '{"containerOverrides":[{"name":"performance-processor","environment":[{"name":"PERFORMANCE_PROCESSOR_MODE","value":"migrate"}]}]}' \
+            --tags \
+              key=Project,value=github-account-info-performance \
+              key=Purpose,value=database-migration \
+            --query 'tasks[0].taskArn' \
+            --output text)"
+
+          if [[ -z "$task_arn" || "$task_arn" == "None" ]]; then
+            echo "AWS did not start the migration task" >&2
+            exit 1
+          fi
+
+          aws ecs wait tasks-stopped \
+            --cluster "$cluster_name" \
+            --tasks "$task_arn"
+
+          exit_code="$(aws ecs describe-tasks \
+            --cluster "$cluster_name" \
+            --tasks "$task_arn" \
+            --query "tasks[0].containers[?name=='performance-processor'].exitCode | [0]" \
+            --output text)"
+          stopped_reason="$(aws ecs describe-tasks \
+            --cluster "$cluster_name" \
+            --tasks "$task_arn" \
+            --query 'tasks[0].stoppedReason' \
+            --output text)"
+
+          if [[ "$exit_code" != "0" ]]; then
+            echo "Migration task failed with exit code $exit_code: $stopped_reason" >&2
+            exit 1
+          fi
+
+          echo "### Database migration" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Task: \`$task_arn\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Exit code: \`0\`" >> "$GITHUB_STEP_SUMMARY"

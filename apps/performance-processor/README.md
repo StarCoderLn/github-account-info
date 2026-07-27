@@ -18,6 +18,7 @@ corepack pnpm --filter performance-processor build
 | 变量 | 说明 |
 | --- | --- |
 | `AWS_REGION` | SQS 所在区域，默认 `us-east-2` |
+| `PERFORMANCE_PROCESSOR_MODE` | `processor`（默认）或一次性 `migrate` |
 | `PERFORMANCE_QUEUE_URL` | 只允许消费的主队列 URL |
 | `DATABASE_URL` | 由 ECS Secrets 注入，不写模板或日志 |
 | `RDS_CA_BUNDLE` | RDS CA 文件，镜像内默认 `/app/certs/rds-bundle.pem` |
@@ -40,8 +41,11 @@ processor 启动后及每 24 小时执行一次明确的 7 天保留清理；清
 
 1. 使用提交 SHA 构建 `prod-<sha>` 镜像。
 2. 推送到 stack 输出的 `PerformanceRepositoryUri`。
-3. 审查 UPDATE Change Set，把相同 `ImageTag` 和 `DesiredCount=1` 传入。
-4. 等待 ECS service stable，再检查 queue、CloudWatch 和数据库。
+3. 审查 UPDATE Change Set，把相同 `ImageTag` 和 `DesiredCount=0` 传入。
+4. 通过 workflow 的 `migrate-database` 启动一次性 Fargate Task；迁移使用镜像内
+   `/app/migrations`、RDS CA 和 ECS Secret，成功后 exit code 为 0。
+5. 再审查 `DesiredCount=1` 的 UPDATE Change Set，等待 ECS service stable，并
+   检查 queue、CloudWatch 和数据库。
 
 构建上下文必须是仓库根目录：
 

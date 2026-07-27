@@ -2,6 +2,9 @@ import { z } from "zod";
 
 const configSchema = z.object({
 	AWS_REGION: z.string().min(1).default("us-east-2"),
+	PERFORMANCE_PROCESSOR_MODE: z
+		.enum(["processor", "migrate"])
+		.default("processor"),
 	PERFORMANCE_QUEUE_URL: z
 		.url()
 		.refine((value) => value.startsWith("https://sqs.")),
