@@ -21,6 +21,7 @@
 - [F3-L06] 实现文件名须与 spec 一致：创建文件前先核对 `specs/` 中 design.md 的命名，避免 review 后再重命名并同步全部 import。
 - [F3-L07] update mutation 必须与 create 保持一致的错误处理：若 create 捕获数据库唯一约束并映射为 `CONFLICT`，update 也必须加入相同守卫，不能把内部数据库错误直接抛给客户端。
 - [F3-L08] 敏感 token 用完即清：GitHub PAT 等临时凭证完成请求后，要在成功路径立即清除 state 并 reset mutation，不能等待 Dialog 关闭，否则凭证会在 React state 中额外存留一个渲染周期。
+- [F3-L09] 账号可见不等于账号可管理：共享数据库中的账号记录只代表公开可见，当前浏览器必须持有 login 匹配的本地 Token 才能展示编辑、删除和生成入口；无 Token 账号只能进入公开只读页。前端门禁只用于当前单用户作业的交互边界，若扩展为多用户系统，必须引入服务端身份与资源归属校验，不能把 localStorage 当成真正的授权机制。
 
 ## Feature 4：Go 个人主页与容器平台
 
@@ -64,6 +65,7 @@ Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
 - [F6-L16] DynamoDB 文档必须持续满足共享 `incidentSchema`，不能为“清空失败”使用 `REMOVE failure`，因为非失败状态的契约也是 `failure: null` 而不是字段缺失。`begin` 和 `complete` 必须显式写 `failure = :null`，否则 investigating/completed 记录会让 `/ops` 的 list/get 在解析时返回 500。
 - [F6-L17] 健康调查时模型可能返回语义合理但不属于内部枚举的 `severity: "none"` / `risk: "none"`。不要为 provider 习惯扩散修改共享 schema 和页面状态；在模型 conclusion 边界接受 `none` 并归一化为内部最低等级 `low`，再执行最终 `investigationSchema` 校验和持久化。
 - [F6-L18] 收紧持久化 schema 后必须兼容已经写入的旧文档：早期 incident 缺少后来新增的 nullable `failure` 字段时，严格解析会让一条旧记录拖垮整个 `ops.list`。应在 DynamoDB 读取边界仅对已知旧形态把缺失字段归一化为 `null`，同时继续拒绝非空的非法值；不要放宽共享 schema，也不要为了修复读取问题用 root 批量改历史数据。
+- [F6-L19] 工作台双栏布局不能让短侧栏被长详情栏强制拉成等高，同时又给侧栏内部列表写死固定高度；这会造成列表内容被裁切、卡片底部留下大片空白。Grid 应使用 `items-start`，侧栏 `self-start`，真实列表按内容增长到视口上限后再独立滚动；只有 loading 和空状态保留固定占位高度。Sticky 的 `top` 还必须按实际导航是否吸顶计算：非 sticky 导航滚出视口后应使用小间距，不能机械套用导航高度而让侧栏悬在页面中部。
 
 ## Feature 7：性能 SDK 与可视化统计
 
@@ -111,3 +113,16 @@ Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
 - [F7-L12] 低流量监控页面经常只有一个时间桶；单点不能按普通折线的首个 x 坐标
   和满量程 y 坐标绘制，否则会留下大片空白并暗示不存在的趋势。单样本应居中展示、
   保留基线和量级语境，并明确提示更多样本到达后才形成连续趋势。
+- [F7-L13] SPA 的页面访问不能只在 SDK `start()` 时记录一次：应用内路由跳转不会
+  重新执行入口文件。应订阅 Router 已完成的 path change，并把 route 在事件创建时
+  固化、删除 query/fragment；SDK 延迟加载前的跳转使用有上限的内存队列暂存，同时
+  跳过首次 Router resolve，避免首访重复计数。
+- [F7-L14] ECS consumer 的 `DesiredCount=0` 只省费用，不会自动处理 SQS；若页面
+  需要低成本的准实时统计，应为精确 Service 注册 `MinCapacity=0`、
+  `MaxCapacity=1` 的 scalable target。scale-out 观察 visible backlog，scale-in
+  必须同时观察 visible 与 in-flight 并要求连续空闲，避免数据库写入期间停 task；
+  部署和验收仍通过 reviewed Change Set，不能直接 `ecs update-service`。
+- [F7-L15] 统计筛选改变 React Query key 时，不能再次进入整页首次加载分支，否则
+  页面会闪白并丢失当前阅读位置。筛选查询应使用 `keepPreviousData` 保留上一份
+  成功结果、后台拉取新数据，并只在页面内提示“正在更新”；后台刷新失败时继续展示
+  旧数据，只有首次请求且没有任何可用数据时才显示整页 loading/error。

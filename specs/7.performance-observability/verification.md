@@ -30,6 +30,70 @@
 闲置状态保持 `DesiredCount=0`，因此没有常驻 Fargate task 费用。Queue、ECR、
 CloudWatch Logs 和 alarms 等按各自用量或保留量计费。
 
+## 本地待部署优化
+
+2026-07-27 线上访问未增加统计时完成只读诊断：
+
+- ECS Service 仍为 `ACTIVE`、`desired=0`、`running=0`、`pending=0`。
+- 主队列可见、处理中、延迟消息均为 `0`。
+- production bundle 包含启用的 SDK、动态 SDK chunk 和正确接收路径。
+- 根因边界包括两项：旧版只在 monitor `start()` 时记录首次加载，不记录
+  TanStack Router SPA path 切换；processor 为 0 时即使消息入队也不会自动清洗。
+
+当前分支已完成但尚未部署：
+
+1. Web 入口记录初始 URL，并在 Router `onResolved` 后记录真实 path 切换。
+2. SDK 支持显式 route 的 `trackPageView(route)`，删除 query/fragment；延迟加载
+   期间最多暂存 100 条 route。
+3. Performance stack 增加 `MinCapacity=0`、`MaxCapacity=1` 的 ECS scalable
+   target、SQS scale-out/scale-in policy，以及同时观察 visible/in-flight 的
+   排空告警。
+4. SDK 专项测试、SDK/Web 类型检查、Web production build、全套 infra boundary
+   和两份 CloudFormation `validate-template` 均通过。
+
+这些记录只代表代码侧和部署准备完成。T-708 在 reviewed Change Set、Cloudflare
+production deployment 和真实 0→1→0 链路验收完成前保持未完成。
+
+## 本地手动验收
+
+### 页面与交互
+
+本地服务由开发者手动启动：
+
+```bash
+pnpm dev
+```
+
+打开 `http://localhost:3001/performance` 后检查：
+
+1. 五项 Web Vitals 卡片均展示，LCP、INP、CLS、FCP、TTFB 数值与评级对应。
+2. 趋势指标可从 LCP 切换到 TTFB；单时间桶显示基线和说明，不伪造连续趋势。
+3. 路由对比表紧贴卡片内容区，不再出现默认上下空带。
+4. 慢请求和错误分布按实际内容自适应高度；空状态或单条数据不再撑满整行。
+5. 时间范围、环境、版本和路由筛选切换后会在后台重新查询；当前统计保持可见，
+   页面不白屏、不回到整页 loading，筛选栏短暂显示“正在更新…”。
+6. 后台刷新失败时保留上一份统计并显示失败提示；刷新按钮仍可重试。
+
+### SDK 事件发送
+
+要在本地观察 SDK 请求，`apps/web/.env` 只需显式打开采集开关：
+
+```env
+VITE_PERFORMANCE_ENABLED=true
+```
+
+`VITE_APP_ENVIRONMENT` 和 `VITE_APP_RELEASE` 只用于给事件添加环境、版本标签；
+本地默认值已经是 `development` 和 `local`，因此不配置时行为相同。
+
+同时确保 `VITE_SERVER_URL` 指向可用的 Node API。打开浏览器开发者工具的 Network，
+筛选 `/api/v1/performance/events`，依次在 `/`、`/ops`、`/performance` 之间做
+SPA 跳转并等待 5 秒；请求应返回 `202`，payload 中的 `page-view.route` 应分别是
+真实 path，且不包含 query 或 fragment。
+
+`202` 只证明浏览器到 SQS 的接收链路成功。当前自动扩缩容 Change Set 尚未部署，
+线上 ECS processor 仍为 `DesiredCount=0`；在 reviewed Change Set 完成前，不能把
+页面访问后数据库统计未立即变化误判为 SDK 失效。
+
 ## 数据库迁移
 
 一次性迁移 workflow run `30254570385` 成功：

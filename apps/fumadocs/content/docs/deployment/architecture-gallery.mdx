@@ -1,11 +1,12 @@
 ---
 title: 架构图总览
-description: 按需求开发顺序查看 Node、Go、可靠性与 AI Ops 架构演进
+description: 按需求开发顺序查看 Node、Go、可靠性、AI Ops 与性能监控架构演进
 icon: Images
 ---
 
 这里按需求开发顺序收录项目部署文档中的架构图：先建立 Node/Lambda 基础，
-再加入 Go 平台、PR Preview、稳定性能力，最后在只读监控证据上增加 AI Ops Agent。
+再加入 Go 平台、PR Preview、稳定性能力和 AI Ops Agent，最后补充浏览器性能 SDK、
+异步清洗与可视化统计链路。
 早期图片用于解释演进过程，不应单独作为当前环境的部署依据。
 
 ## Node/Lambda 初始部署
@@ -67,6 +68,16 @@ icon: Images
 图中同时标出了现有生产服务、可观测性证据、Mastra 调查编排、GitHub Models
 适配层、人工确认闭环，以及 GitHub Actions OIDC 和最小权限安全边界。
 
+## 性能 SDK 与可视化统计
+
+**适合回答：浏览器 Web Vitals 如何进入 SQS、由谁清洗，以及页面统计来自哪里？**
+
+![github-account-info 性能 SDK、异步清洗与可视化统计架构](./performance-observability/assets/performance-observability-architecture.png)
+
+这张图明确区分性能事件接收、异步队列、ECS 清洗、PostgreSQL 统计查询和部署安全
+边界。核心 `API → SQS → ECS → PostgreSQL → /performance` 真实链路已经验收；
+队列驱动的 ECS 0→1→0 自动伸缩属于后续增强，状态以专题页和 verification 记录为准。
+
 ## 怎么选择要看的图
 
 | 想了解的问题 | 推荐查看 |
@@ -76,4 +87,5 @@ icon: Images
 | 核心运行、生产 CI/CD 与 PR Preview | 核心部署与 PR Preview |
 | Synthetics、事件队列、灰度发布与监控 | 稳定性与异步事件 |
 | 告警、证据、模型和调查结果 | AI Ops Agent |
-| 当前项目的主要部署形态 | 核心部署与 PR Preview + 稳定性与异步事件 + AI Ops Agent |
+| Web Vitals、性能事件清洗和分位数统计 | 性能 SDK 与可视化统计 |
+| 当前项目的主要部署形态 | 核心部署与 PR Preview + 稳定性与异步事件 + AI Ops Agent + 性能监控 |

@@ -166,9 +166,12 @@ Agent role 不含 ECS/Lambda/CloudFormation/SQS 写操作。任何建议都只�
 链路为浏览器 → `POST /api/v1/performance/events` → Node Lambda → SQS → 独立 ECS
 processor → CloudWatch/PostgreSQL。排障按层进行：
 
-成本边界：processor 默认 `DesiredCount=0`。只有真实链路验收窗口才通过
-`Performance Change Set` workflow 审查并切到 1；演练完成必须再以 Change Set
-恢复为 0。禁止直接 `aws ecs update-service`，否则会造成 CloudFormation drift。
+成本边界：processor 的 scalable target 为 `MinCapacity=0`、`MaxCapacity=1`。
+SQS 出现可见消息后 scale-out alarm 将 Service 从 0 扩到 1；可见与处理中消息之和
+连续 3 分钟为 0 后 scale-in alarm 恢复到 0。当前 production stack 在该 Change
+Set 部署前仍是手动 `DesiredCount=0`，不能把本地模板状态当成线上已生效。禁止
+直接 `aws ecs update-service`，否则会造成 CloudFormation/Application Auto
+Scaling 状态漂移。
 
 1. 浏览器没有请求：确认 production 构建变量
    `VITE_PERFORMANCE_ENABLED=true`，且 SDK 在 idle 阶段初始化。
@@ -176,8 +179,9 @@ processor → CloudWatch/PostgreSQL。排障按层进行：
    stack 尚未接入完整 Queue URL/ARN。
 3. API 返回 202 但队列没有消息：检查 Lambda Role 是否仅对实际 queue ARN 拥有
    `sqs:SendMessage`，不要扩大为 `sqs:*`。
-4. 队列积压：检查 ECS Service desired/running count、停止原因、SQS HTTPS 出站和
-   `/ecs/github-account-info-performance` 日志。
+4. 队列积压：先检查 `queue-scale-out` alarm、scalable target 和 scaling
+   activity，再检查 ECS Service desired/running count、停止原因、SQS HTTPS
+   出站和 `/ecs/github-account-info-performance` 日志。
 5. processor 报数据库失败：检查 Secret 注入、RDS SG 5432 和迁移；禁止打印
    `DATABASE_URL`。
 6. CloudWatch 有清洗日志但页面为空：检查 `performance_event` 数据时间、environment
@@ -203,6 +207,13 @@ aws ecs describe-services \
   --cluster github-account-info-go \
   --services github-account-info-performance \
   --query 'services[0].{Desired:desiredCount,Running:runningCount,Pending:pendingCount,Events:events[0:5]}'
+
+aws application-autoscaling describe-scaling-activities \
+  --region us-east-2 \
+  --service-namespace ecs \
+  --resource-id service/github-account-info-go/github-account-info-performance \
+  --scalable-dimension ecs:service:DesiredCount \
+  --max-results 10
 ```
 
 测试 DLQ 时使用契约合法但数据库暂时不可用的受控环境；查看主队列消息会改变

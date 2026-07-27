@@ -10,6 +10,10 @@ const quickLinks = [
     label: "稳定性与异步事件",
   },
   { href: "/docs/deployment/ai-ops-agent", label: "AI Ops Agent" },
+  {
+    href: "/docs/deployment/performance-observability",
+    label: "性能监控与统计",
+  },
 ] as const;
 
 export default function HomePage() {
@@ -23,7 +27,8 @@ export default function HomePage() {
       </h1>
       <p className="mt-6 max-w-2xl text-lg leading-8 text-fd-muted-foreground">
         按需求开发顺序记录 Node Lambda、Go ECS/Fargate、Synthetics
-        巡检、SNS/SQS/DLQ、灰度发布与 AI Ops Agent。忘记细节时，可以从这里重新学一遍。
+        巡检、SNS/SQS/DLQ、灰度发布、AI Ops Agent
+        与浏览器性能监控。忘记细节时，可以从这里重新学一遍。
       </p>
       <div className="mt-10 flex flex-wrap gap-3">
         <Link

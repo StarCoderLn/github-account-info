@@ -15,7 +15,7 @@ icon: BookOpen
 <Cards>
   <Card
     title="当前部署全景"
-    description="先浏览 Node、Go、事件链路和 AI Ops 如何协作。"
+    description="先浏览 Node、Go、事件链路、AI Ops 和性能监控如何协作。"
     href="/docs/deployment"
   />
   <Card
@@ -43,6 +43,11 @@ icon: BookOpen
     description="在现有监控证据之上搭建只读调查 Agent，并保留人工审批边界。"
     href="/docs/deployment/ai-ops-agent"
   />
+  <Card
+    title="性能监控与可视化统计"
+    description="学习浏览器 SDK、SQS、ECS 清洗、PostgreSQL 分位数和性能仪表盘。"
+    href="/docs/deployment/performance-observability"
+  />
 </Cards>
 
 ## 文档与事实来源
@@ -53,7 +58,9 @@ icon: BookOpen
 - `specs/4.go-profile-platform/` 保存需求、设计决策和真实验收记录。
 - `specs/5.operational-resilience/` 保存稳定性、事件链路与灰度发布记录。
 - `apps/ai-ops-agent/README.md` 和 `specs/6.ai-ops-agent/` 保存 AI Ops
-  实现边界、成本估算、部署准备和待验收事项。
+  实现边界、成本估算、真实链路验收和保留事项。
+- `specs/7.performance-observability/` 保存浏览器性能链路的设计、部署状态和
+  真实验收证据。
 - `infra/RUNBOOK.md` 保存线上日常运维与故障处置命令。
 
 当教程与代码出现差异时，先检查代码和 CloudFormation，再更新教程；不要为了匹配旧文档而回退已经验证的安全边界。

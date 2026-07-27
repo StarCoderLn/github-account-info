@@ -9,29 +9,36 @@ import {
 	TableHeader,
 	TableRow,
 } from "@github-account-info/ui/components/table";
-import { useQuery } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
-import { Pencil, Plus, Trash2 } from "lucide-react";
-
-import { trpc } from "@/utils/trpc";
+import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 export type AccountRow = RouterOutputs["account"]["list"][number];
 
 interface AccountTableProps {
+	data: AccountRow[] | undefined;
+	isLoading: boolean;
+	canManage: (account: AccountRow) => boolean;
 	onAdd: () => void;
+	onView: (account: AccountRow) => void;
 	onEdit: (account: AccountRow) => void;
 	onDelete: (account: AccountRow) => void;
 }
 
-export function AccountTable({ onAdd, onEdit, onDelete }: AccountTableProps) {
-	const { data, isLoading } = useQuery(trpc.account.list.queryOptions());
-
+export function AccountTable({
+	data,
+	isLoading,
+	canManage,
+	onAdd,
+	onView,
+	onEdit,
+	onDelete,
+}: AccountTableProps) {
 	if (isLoading) {
 		return (
-			<div className="space-y-2">
+			<div className="flex flex-col gap-2 px-4 py-5">
 				{Array.from({ length: 4 }).map((_, i) => (
-					<Skeleton key={i} className="h-10 w-full" />
+					<Skeleton key={`account-skeleton-${i}`} className="h-10 w-full" />
 				))}
 			</div>
 		);
@@ -39,10 +46,18 @@ export function AccountTable({ onAdd, onEdit, onDelete }: AccountTableProps) {
 
 	if (!data || data.length === 0) {
 		return (
-			<div className="rounded-none border p-12 text-center">
-				<p className="mb-4 text-muted-foreground text-sm">暂无账户记录</p>
+			<div className="flex flex-col items-center gap-4 px-6 py-14 text-center">
+				<div className="flex size-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+					<Plus className="size-5" aria-hidden="true" />
+				</div>
+				<div>
+					<p className="font-medium">暂无账号记录</p>
+					<p className="text-muted-foreground">
+						新增一个 GitHub 账号后即可在这里统一管理。
+					</p>
+				</div>
 				<Button onClick={onAdd}>
-					<Plus />
+					<Plus data-icon="inline-start" />
 					新增账户
 				</Button>
 			</div>
@@ -51,15 +66,15 @@ export function AccountTable({ onAdd, onEdit, onDelete }: AccountTableProps) {
 
 	return (
 		<Table>
-			<TableHeader>
+			<TableHeader className="bg-blue-50/70">
 				<TableRow>
 					<TableHead className="w-12">头像</TableHead>
-					<TableHead>Login</TableHead>
-					<TableHead>Name</TableHead>
-					<TableHead>Company</TableHead>
-					<TableHead className="text-right">Followers</TableHead>
-					<TableHead className="text-right">Following</TableHead>
-					<TableHead className="w-20">操作</TableHead>
+					<TableHead>GitHub 用户名</TableHead>
+					<TableHead>显示名称</TableHead>
+					<TableHead>公司</TableHead>
+					<TableHead className="text-right">关注者</TableHead>
+					<TableHead className="text-right">正在关注</TableHead>
+					<TableHead className="w-28">操作</TableHead>
 				</TableRow>
 			</TableHeader>
 			<TableBody>
@@ -70,13 +85,21 @@ export function AccountTable({ onAdd, onEdit, onDelete }: AccountTableProps) {
 								<img
 									src={account.avatarUrl}
 									alt={account.login}
-									className="size-8 rounded-full object-cover"
+									width={40}
+									height={40}
+									loading="lazy"
+									className="size-10 rounded-xl object-cover ring-1 ring-blue-100"
 								/>
 							) : (
-								<div className="size-8 rounded-full bg-muted" />
+								<div
+									className="flex size-10 items-center justify-center rounded-xl bg-blue-50 font-semibold text-blue-600"
+									aria-hidden="true"
+								>
+									{account.login.slice(0, 1).toUpperCase()}
+								</div>
 							)}
 						</TableCell>
-						<TableCell className="font-medium font-mono">
+						<TableCell className="font-medium font-mono" translate="no">
 							{account.login}
 						</TableCell>
 						<TableCell className="text-muted-foreground">
@@ -96,19 +119,33 @@ export function AccountTable({ onAdd, onEdit, onDelete }: AccountTableProps) {
 								<Button
 									variant="ghost"
 									size="icon-sm"
-									onClick={() => onEdit(account)}
-									aria-label="编辑"
+									onClick={() => onView(account)}
+									aria-label={`查看 ${account.login} 的公开主页`}
+									className="text-blue-600 hover:bg-blue-50 hover:text-blue-700"
 								>
-									<Pencil />
+									<Eye />
 								</Button>
-								<Button
-									variant="ghost"
-									size="icon-sm"
-									onClick={() => onDelete(account)}
-									aria-label="删除"
-								>
-									<Trash2 className="text-destructive" />
-								</Button>
+								{canManage(account) ? (
+									<>
+										<Button
+											variant="ghost"
+											size="icon-sm"
+											onClick={() => onEdit(account)}
+											aria-label={`编辑 ${account.login}`}
+											className="text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+										>
+											<Pencil />
+										</Button>
+										<Button
+											variant="ghost"
+											size="icon-sm"
+											onClick={() => onDelete(account)}
+											aria-label={`删除 ${account.login}`}
+										>
+											<Trash2 className="text-destructive" />
+										</Button>
+									</>
+								) : null}
 							</div>
 						</TableCell>
 					</TableRow>

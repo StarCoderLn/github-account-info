@@ -68,6 +68,12 @@ metadata map。禁止任意 map 可以降低意外收集敏感信息和高基数
 幂等，五个 `web-vitals` observer 只注册一次。SDK 使用动态 import 延后加载
 `web-vitals`，避免阻塞首屏。
 
+Web 入口在调用 SDK 时关闭 monitor 内部的自动首访计数，先捕获当前完整 URL，再由
+入口显式记录一次初始 `page-view`。TanStack Router 的 `onResolved` 只在
+`fromLocation` 存在且 `pathChanged=true` 时记录后续访问，因此首次解析不会重复，
+query/hash 变化也不会虚增访问量。SDK 动态 chunk 就绪前到达的 route 使用最多
+100 条的内存队列暂存；route 在入队时立即删除 query/fragment 并归一化。
+
 队列满足任一条件时 flush：
 
 - 累计 20 条；
@@ -106,6 +112,23 @@ processor 使用 20 秒 SQS 长轮询，每次最多读取 10 条 batch 消息�
 
 非法契约属于永久错误，记录批次拒绝日志后删除消息；数据库连接、SQS API 和未知
 运行时错误属于暂时错误，不删除消息，由 visibility timeout 和 DLQ 处理。
+
+## ECS 按队列自动伸缩
+
+processor 仍是独立 ECS Service，但 Application Auto Scaling 将容量限制为
+`MinCapacity=0`、`MaxCapacity=1`：
+
+1. `ApproximateNumberOfMessagesVisible >= 1` 持续一个 60 秒数据点时执行
+   `ChangeInCapacity +1`。
+2. 可见消息与 `ApproximateNumberOfMessagesNotVisible` 之和小于 1，且连续三个
+   60 秒数据点成立时执行 `ChangeInCapacity -1`。
+3. scale-in 使用 180 秒 cooldown，消息仍在 visibility timeout 或数据库处理中
+   时不会把 task 提前停掉。
+
+CloudWatch SQS 指标和 Fargate 冷启动决定这不是秒级实时链路；目标是在低流量时
+避免常驻费用，同时无需人工切换 DesiredCount。扩缩容策略只管理该 Service 的
+`ecs:service:DesiredCount`，最多启动一个 processor，不依据 Web Vitals 好坏扩容
+业务服务。
 
 ## PostgreSQL
 

@@ -23,8 +23,8 @@ Parameters:
     MinValue: 0
     MaxValue: 1
     Description: >-
-      Keep zero for the first stack creation, push the immutable image, then
-      update to one.
+      Deployment-time desired count. Keep zero for normal operation; service
+      auto scaling starts one task when the performance queue has work.
   AlarmTopicArn:
     Type: String
     Default: ""
@@ -288,6 +288,106 @@ Resources:
           Value: !Ref ProjectName
         - Key: ManagedBy
           Value: cloudformation
+
+  PerformanceScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn: PerformanceService
+    Properties:
+      MaxCapacity: 1
+      MinCapacity: 0
+      ResourceId: !Sub service/${FoundationProjectName}/${ProjectName}
+      RoleARN: !Sub >-
+        arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  PerformanceScaleOutPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${ProjectName}-queue-scale-out
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref PerformanceScalableTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 60
+        MetricAggregationType: Maximum
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            ScalingAdjustment: 1
+
+  PerformanceScaleInPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${ProjectName}-queue-scale-in
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref PerformanceScalableTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 180
+        MetricAggregationType: Maximum
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0
+            ScalingAdjustment: -1
+
+  PerformanceQueueBacklogAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-queue-scale-out
+      AlarmDescription: Start one performance processor when the queue has work.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt PerformanceQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref PerformanceScaleOutPolicy
+
+  PerformanceQueueDrainedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-queue-scale-in
+      AlarmDescription: Stop the performance processor after the queue is drained.
+      Metrics:
+        - Id: visible
+          MetricStat:
+            Metric:
+              Namespace: AWS/SQS
+              MetricName: ApproximateNumberOfMessagesVisible
+              Dimensions:
+                - Name: QueueName
+                  Value: !GetAtt PerformanceQueue.QueueName
+            Period: 60
+            Stat: Maximum
+          ReturnData: false
+        - Id: in_flight
+          MetricStat:
+            Metric:
+              Namespace: AWS/SQS
+              MetricName: ApproximateNumberOfMessagesNotVisible
+              Dimensions:
+                - Name: QueueName
+                  Value: !GetAtt PerformanceQueue.QueueName
+            Period: 60
+            Stat: Maximum
+          ReturnData: false
+        - Id: backlog
+          Expression: visible + in_flight
+          Label: Total performance queue backlog
+          ReturnData: true
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref PerformanceScaleInPolicy
 
   PerformanceDeadLetterAlarm:
     Type: AWS::CloudWatch::Alarm
