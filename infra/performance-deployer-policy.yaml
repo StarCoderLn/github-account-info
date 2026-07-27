@@ -1,0 +1,177 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Supplemental least-privilege policy for the existing GitHub Actions OIDC
+  role to deploy and publish only the performance observability resources.
+
+Parameters:
+  DeploymentRoleName:
+    Type: String
+    Default: github-actions-deployer
+    AllowedPattern: "^[A-Za-z0-9+=,.@_-]{1,64}$"
+  ProjectName:
+    Type: String
+    Default: github-account-info-performance
+    AllowedPattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+  FoundationProjectName:
+    Type: String
+    Default: github-account-info-go
+    AllowedPattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+
+Resources:
+  PerformanceDeployPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: github-account-info-performance-deploy
+      Description: Deploys and publishes only project-scoped performance resources.
+      Roles:
+        - !Ref DeploymentRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ManagePerformanceQueues
+            Effect: Allow
+            Action:
+              - sqs:CreateQueue
+              - sqs:DeleteQueue
+              - sqs:GetQueueAttributes
+              - sqs:GetQueueUrl
+              - sqs:ListQueueTags
+              - sqs:SetQueueAttributes
+              - sqs:TagQueue
+              - sqs:UntagQueue
+            Resource:
+              - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ProjectName}-events
+              - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ProjectName}-dlq
+          - Sid: ListQueuesForDeployment
+            Effect: Allow
+            Action: sqs:ListQueues
+            Resource: "*"
+          - Sid: ManagePerformanceRepository
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:CompleteLayerUpload
+              - ecr:CreateRepository
+              - ecr:DeleteLifecyclePolicy
+              - ecr:DeleteRepository
+              - ecr:DescribeImages
+              - ecr:DescribeRepositories
+              - ecr:GetDownloadUrlForLayer
+              - ecr:GetLifecyclePolicy
+              - ecr:GetRepositoryPolicy
+              - ecr:InitiateLayerUpload
+              - ecr:ListImages
+              - ecr:ListTagsForResource
+              - ecr:PutImage
+              - ecr:PutImageScanningConfiguration
+              - ecr:PutImageTagMutability
+              - ecr:PutLifecyclePolicy
+              - ecr:SetRepositoryPolicy
+              - ecr:StartImageScan
+              - ecr:TagResource
+              - ecr:UntagResource
+              - ecr:UploadLayerPart
+            Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}
+          - Sid: AuthorizeEcrPush
+            Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: "*"
+          - Sid: ManagePerformanceEcsService
+            Effect: Allow
+            Action:
+              - ecs:CreateService
+              - ecs:DeleteService
+              - ecs:DescribeServices
+              - ecs:ListTagsForResource
+              - ecs:TagResource
+              - ecs:UntagResource
+              - ecs:UpdateService
+            Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${FoundationProjectName}/${ProjectName}
+          - Sid: ManagePerformanceTaskDefinitions
+            Effect: Allow
+            Action:
+              - ecs:DeregisterTaskDefinition
+              - ecs:DescribeTaskDefinition
+              - ecs:ListTaskDefinitions
+              - ecs:ListTagsForResource
+              - ecs:RegisterTaskDefinition
+              - ecs:TagResource
+              - ecs:UntagResource
+            Resource: "*"
+            Condition:
+              StringEqualsIfExists:
+                aws:RequestTag/Project: !Ref ProjectName
+          - Sid: ReadFoundationEcsAndNetwork
+            Effect: Allow
+            Action:
+              - ecs:DescribeClusters
+              - ecs:ListClusters
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeSubnets
+              - ec2:DescribeVpcs
+            Resource: "*"
+          - Sid: ManagePerformanceRoles
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:DeleteRole
+              - iam:DeleteRolePolicy
+              - iam:GetRole
+              - iam:GetRolePolicy
+              - iam:ListRolePolicies
+              - iam:ListRoleTags
+              - iam:PutRolePolicy
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:UpdateAssumeRolePolicy
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/github-account-info/${ProjectName}-execution-role
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/github-account-info/${ProjectName}-task-role
+          - Sid: PassOnlyPerformanceRolesToEcs
+            Effect: Allow
+            Action: iam:PassRole
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/github-account-info/${ProjectName}-execution-role
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/github-account-info/${ProjectName}-task-role
+            Condition:
+              StringEquals:
+                iam:PassedToService: ecs-tasks.amazonaws.com
+          - Sid: ManagePerformanceLogGroup
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:DeleteLogGroup
+              - logs:DeleteRetentionPolicy
+              - logs:ListTagsForResource
+              - logs:PutRetentionPolicy
+              - logs:TagResource
+              - logs:UntagResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${ProjectName}
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${ProjectName}:*
+          - Sid: DescribeLogGroupsForDeployment
+            Effect: Allow
+            Action: logs:DescribeLogGroups
+            Resource: "*"
+          - Sid: ManagePerformanceAlarms
+            Effect: Allow
+            Action:
+              - cloudwatch:DeleteAlarms
+              - cloudwatch:ListTagsForResource
+              - cloudwatch:PutMetricAlarm
+              - cloudwatch:TagResource
+              - cloudwatch:UntagResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ProjectName}-dlq-not-empty
+              - !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ProjectName}-oldest-message
+          - Sid: DescribeAlarmsForDeployment
+            Effect: Allow
+            Action: cloudwatch:DescribeAlarms
+            Resource: "*"
+
+Outputs:
+  ManagedPolicyArn:
+    Value: !Ref PerformanceDeployPolicy
+  AttachedRoleName:
+    Value: !Ref DeploymentRoleName

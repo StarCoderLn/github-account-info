@@ -16,7 +16,9 @@ const expectedRouteKeys = [
 	"GET /healthz",
 	"GET /readyz",
 	"OPTIONS /api/v1/{proxy+}",
+	"OPTIONS /api/v1/performance/events",
 	"OPTIONS /trpc/{proxy+}",
+	"POST /api/v1/performance/events",
 ].sort();
 
 const api = resourceBlock("ServerlessHttpApi");
@@ -42,8 +44,15 @@ assertIncludes(api, "type: aws_proxy");
 assertIncludes(api, 'payloadFormatVersion: "2.0"');
 assertExcludes(apiFunction, "AutoPublishAlias:");
 assertExcludes(apiFunction, "DeploymentPreference:");
-assertOccurrenceCount(api, "ApiAliasArn: !Sub ${ApiFunction.Arn}:live", 3);
-assertIncludes(template, "FunctionName: !Sub ${ApiFunction.Arn}:live");
+assertOccurrenceCount(
+	api,
+	["ApiAliasArn: !Sub $", "{ApiFunction.Arn}:live"].join(""),
+	4,
+);
+assertIncludes(
+	template,
+	["FunctionName: !Sub $", "{ApiFunction.Arn}:live"].join(""),
+);
 assertExcludes(api, "ProtocolType:");
 assertExcludes(template, "Type: AWS::ApiGatewayV2::Route");
 assertMatches(
@@ -80,7 +89,7 @@ function openApiRouteKeys(apiBlock) {
 		}
 
 		const methodMatch = line.match(
-			/^ {12}(get|options|x-amazon-apigateway-any-method):\s*$/,
+			/^ {12}(get|post|options|x-amazon-apigateway-any-method):\s*$/,
 		);
 		if (!currentPath || !methodMatch) continue;
 

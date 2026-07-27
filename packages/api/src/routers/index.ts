@@ -3,6 +3,7 @@ import { accountRouter } from "./account";
 import { githubRouter } from "./github";
 import { introductionRouter } from "./introduction";
 import { opsRouter } from "./ops";
+import { performanceRouter } from "./performance";
 
 export const appRouter = router({
 	healthCheck: publicProcedure.query(() => {
@@ -12,5 +13,6 @@ export const appRouter = router({
 	account: accountRouter,
 	introduction: introductionRouter,
 	ops: opsRouter,
+	performance: performanceRouter,
 });
 export type AppRouter = typeof appRouter;

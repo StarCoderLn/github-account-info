@@ -17,6 +17,69 @@ for variable_name in "${required_variables[@]}"; do
   fi
 done
 
+ai_ops_incident_table=""
+ai_ops_incident_table_arn=""
+ai_ops_queue_url=""
+ai_ops_queue_arn=""
+readonly AI_OPS_STACK_NAME="github-account-info-ai-ops"
+performance_queue_url=""
+performance_queue_arn=""
+readonly PERFORMANCE_STACK_NAME="github-account-info-performance"
+
+# AI Ops 是独立 stack；Node 部署只读取它的非敏感输出，不复制或硬编码资源标识。
+# stack 尚未部署时保留空参数，维持旧环境的兼容行为；stack 存在时四项必须完整。
+if aws cloudformation describe-stacks \
+  --region "$AWS_DEFAULT_REGION" \
+  --stack-name "$AI_OPS_STACK_NAME" >/dev/null 2>&1; then
+  read_ai_ops_output() {
+    local output_key="$1"
+    aws cloudformation describe-stacks \
+      --region "$AWS_DEFAULT_REGION" \
+      --stack-name "$AI_OPS_STACK_NAME" \
+      --query "Stacks[0].Outputs[?OutputKey=='${output_key}'].OutputValue | [0]" \
+      --output text
+  }
+
+  ai_ops_incident_table="$(read_ai_ops_output IncidentTableName)"
+  ai_ops_incident_table_arn="$(read_ai_ops_output IncidentTableArn)"
+  ai_ops_queue_url="$(read_ai_ops_output InvestigationQueueUrl)"
+  ai_ops_queue_arn="$(read_ai_ops_output InvestigationQueueArn)"
+
+  for ai_ops_value in \
+    "$ai_ops_incident_table" \
+    "$ai_ops_incident_table_arn" \
+    "$ai_ops_queue_url" \
+    "$ai_ops_queue_arn"; do
+    if [[ -z "$ai_ops_value" || "$ai_ops_value" == "None" ]]; then
+      echo "AI Ops stack exists but required outputs are incomplete" >&2
+      exit 1
+    fi
+  done
+fi
+
+# Performance stack 也是独立生命周期；存在时 URL/ARN 必须同时完整。
+if aws cloudformation describe-stacks \
+  --region "$AWS_DEFAULT_REGION" \
+  --stack-name "$PERFORMANCE_STACK_NAME" >/dev/null 2>&1; then
+  read_performance_output() {
+    local output_key="$1"
+    aws cloudformation describe-stacks \
+      --region "$AWS_DEFAULT_REGION" \
+      --stack-name "$PERFORMANCE_STACK_NAME" \
+      --query "Stacks[0].Outputs[?OutputKey=='${output_key}'].OutputValue | [0]" \
+      --output text
+  }
+
+  performance_queue_url="$(read_performance_output PerformanceQueueUrl)"
+  performance_queue_arn="$(read_performance_output PerformanceQueueArn)"
+  for performance_value in "$performance_queue_url" "$performance_queue_arn"; do
+    if [[ -z "$performance_value" || "$performance_value" == "None" ]]; then
+      echo "Performance stack exists but queue outputs are incomplete" >&2
+      exit 1
+    fi
+  done
+fi
+
 stable_version=""
 set +e
 # get-alias 在首次部署会返回非零。这里临时关闭 `set -e` 是为了区分“alias
@@ -62,7 +125,13 @@ sam deploy \
   --parameter-overrides \
     DatabaseUrl="$DATABASE_URL" \
     CorsOrigin="$CORS_ORIGIN" \
-    ProfileEventsTopicArn="$PROFILE_EVENTS_TOPIC_ARN"
+    ProfileEventsTopicArn="$PROFILE_EVENTS_TOPIC_ARN" \
+    AiOpsIncidentTableName="$ai_ops_incident_table" \
+    AiOpsIncidentTableArn="$ai_ops_incident_table_arn" \
+    AiOpsQueueUrl="$ai_ops_queue_url" \
+    AiOpsQueueArn="$ai_ops_queue_arn" \
+    PerformanceQueueUrl="$performance_queue_url" \
+    PerformanceQueueArn="$performance_queue_arn"
 
 aws lambda wait function-updated-v2 \
   --region "$AWS_DEFAULT_REGION" \

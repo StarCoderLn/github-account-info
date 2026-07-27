@@ -14,6 +14,8 @@
 - `profile-events.yaml`：个人介绍完成事件的 SNS → SSE-SQS queue → publication verifier Lambda → DLQ 链路及队列告警；SSE-SQS 仅负责队列静态加密，部署时传入公开 API origin。
 - `synthetics.yaml`：公开 API 的 CloudWatch Synthetics 巡检、产物 bucket 与失败告警。
 - `ai-ops.yaml`：CloudWatch 告警归一化、SQS/DLQ、DynamoDB incident、Mastra 调查 Lambda 及只读 IAM；不会自动执行修复。
+- `performance.yaml`：浏览器性能事件的 SSE-SQS/DLQ、独立 ECR/Fargate 清洗
+  Service、CloudWatch Log Group 和队列告警；首次以 `DesiredCount=0` 创建。
 - `ai-ops-deployer-policy.yaml`：为现有 GitHub Actions OIDC Role 补充部署 AI Ops
   DynamoDB、SQS、日志组、Alarm 和 EventBridge rule 所需的资源级权限。
 - `server-deployer-policy.yaml`：绑定现有 `github-actions-deployer` 的 customer managed policy；只管理 Node/SAM 的 observability 资源，不创建或替换 OIDC Role。
@@ -120,6 +122,42 @@ AI Ops Stack，不使用账号 root 凭证。
 5. 审查资源、IAM 和费用后，运行 `execute-agent-change-set`。
 
 执行操作与创建 Change Set 是两个独立的手工选择，不存在 push 自动部署路径。
+
+## Performance 部署顺序
+
+Feature 7 使用独立 stack `github-account-info-performance`。首次创建时传
+`DesiredCount=0`，因为 ECR repository 与 runtime 位于同一模板，repository 创建
+前还没有可供 ECS 拉取的不可变镜像。
+
+部署只能通过 `Performance Change Set` workflow 使用 GitHub OIDC 临时凭证执行。
+本机即使能解析 AWS root 凭证，也只允许做只读审计，禁止用它创建或更新本功能
+资源。workflow 只支持 `workflow_dispatch`，不会因 push 自动创建收费资源。
+
+推荐顺序：
+
+1. `create-policy-change-set`：创建仅含一项 managed policy 的待审 Change Set。
+2. 审查后使用 `execute-policy-change-set` 执行，并传入上一步名称。
+3. 运行数据库迁移，确认 `performance_event` 表和三个索引已创建。
+4. `create-runtime-change-set`：创建 performance CREATE Change Set；首次创建
+   workflow 会强制 `DesiredCount=0`。
+5. 审查后使用 `execute-runtime-change-set` 执行。
+6. 使用 `push-image` 构建、测试并推送 `prod-<commit-sha>` 不可变镜像。
+7. 演示前创建并执行 `DesiredCount=1` 的 runtime UPDATE Change Set；记录开始时间。
+8. stack 成功后，Node 发布脚本自动读取 `PerformanceQueueUrl/Arn` 输出并传给
+   server SAM stack；不存在 performance stack 时两项保持全空。
+9. Cloudflare Pages production 设置
+   `VITE_PERFORMANCE_ENABLED=true`、`VITE_APP_ENVIRONMENT=production` 和不可变
+   `VITE_APP_RELEASE`，再构建 web。
+10. 验收结束立即创建并执行 `DesiredCount=0` 的 runtime UPDATE Change Set，
+    并确认 ECS running count 已回到 0。
+
+浏览器始终只调用 `/api/v1/performance/events`，不接触 Queue URL 或 AWS 凭证。
+清洗日志位于 `/ecs/github-account-info-performance`。
+
+Agent stack 成功后，下一次 Node Lambda 部署会从
+`github-account-info-ai-ops` stack 读取事件表 Name/ARN 和调查队列 URL/ARN，
+传入 `apps/server/template.yaml` 的四个可选参数，再通过既有 10% Canary 发布。
+这些输出不是凭证；不要把物理资源标识重复维护为 GitHub Secret/Variable。
 
 ## Node/SAM 部署角色权限迁移
 

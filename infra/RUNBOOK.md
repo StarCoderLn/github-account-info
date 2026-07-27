@@ -11,6 +11,8 @@
 | `*-production-no-running-task` | ECS service 两个采样点少于一个 running task | ECS events、镜像拉取、Secret 注入、子网出站 |
 | `*-production-high-cpu` | 五分钟内至少三分钟 CPU 不低于 85% | 请求量、慢查询、task CPU；确认后再扩容 |
 | `*-http-api-5xx` | API Gateway 连续两分钟出现 5xx | access log 的 routeKey/integrationError，再区分 Lambda 与 VPC Link |
+| `github-account-info-performance-oldest-message` | 性能事件五分钟未清洗 | processor desired/running count、task 日志、RDS 和 SQS |
+| `github-account-info-performance-dlq-not-empty` | 性能事件已耗尽五次重试 | 先分类永久/暂时错误，修复前不 redrive |
 
 `AlarmTopicArn` 留空时告警仍会创建并在 CloudWatch Console 改变状态，但不会发通知。需要邮件或聊天通知时，先由用户创建并验证 SNS subscription，再把同一个 Topic ARN 作为 production 与 server stack 参数传入。CloudWatch Alarm、API Gateway detailed metrics 和 ECS Container Insights 都可能产生少量监控费用。
 
@@ -158,3 +160,44 @@ investigator Lambda → DynamoDB。`/ops` 仅从 DynamoDB 查询结果，不同�
 Agent role 不含 ECS/Lambda/CloudFormation/SQS 写操作。任何建议都只是待人工审批
 的数据；若未来增加执行能力，必须使用独立 role、白名单动作和新的 change set，
 不能扩展当前 investigator role。
+
+## Performance SDK 与清洗链路
+
+链路为浏览器 → `POST /api/v1/performance/events` → Node Lambda → SQS → 独立 ECS
+processor → CloudWatch/PostgreSQL。排障按层进行：
+
+成本边界：processor 默认 `DesiredCount=0`。只有真实链路验收窗口才通过
+`Performance Change Set` workflow 审查并切到 1；演练完成必须再以 Change Set
+恢复为 0。禁止直接 `aws ecs update-service`，否则会造成 CloudFormation drift。
+
+1. 浏览器没有请求：确认 production 构建变量
+   `VITE_PERFORMANCE_ENABLED=true`，且 SDK 在 idle 阶段初始化。
+2. API 返回 503 `PERFORMANCE_INGEST_DISABLED`：performance stack 不存在，或 Node
+   stack 尚未接入完整 Queue URL/ARN。
+3. API 返回 202 但队列没有消息：检查 Lambda Role 是否仅对实际 queue ARN 拥有
+   `sqs:SendMessage`，不要扩大为 `sqs:*`。
+4. 队列积压：检查 ECS Service desired/running count、停止原因、SQS HTTPS 出站和
+   `/ecs/github-account-info-performance` 日志。
+5. processor 报数据库失败：检查 Secret 注入、RDS SG 5432 和迁移；禁止打印
+   `DATABASE_URL`。
+6. CloudWatch 有清洗日志但页面为空：检查 `performance_event` 数据时间、environment
+   筛选和 Node Lambda 的数据库连接。
+
+只读检查：
+
+```bash
+aws sqs get-queue-attributes \
+  --region us-east-2 \
+  --queue-url <PERFORMANCE_QUEUE_URL> \
+  --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
+
+aws ecs describe-services \
+  --region us-east-2 \
+  --cluster github-account-info-go \
+  --services github-account-info-performance \
+  --query 'services[0].{Desired:desiredCount,Running:runningCount,Pending:pendingCount,Events:events[0:5]}'
+```
+
+测试 DLQ 时使用契约合法但数据库暂时不可用的受控环境；查看主队列消息会改变
+receive count 和 visibility。永久非法事件会被 processor 明确拒绝并确认消费，
+不会进入 DLQ。

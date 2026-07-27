@@ -55,10 +55,17 @@ function RootComponent() {
 							>
 								AI Ops
 							</Link>
+							<Link
+								to="/performance"
+								className="px-3 py-1.5 text-slate-600 hover:bg-slate-100"
+								activeProps={{ className: "bg-slate-900 text-white" }}
+							>
+								性能监控
+							</Link>
 						</nav>
 					</div>
 				</header>
-				<main className="px-6 py-8">
+				<main className="mx-auto max-w-6xl px-6 py-8">
 					<Outlet />
 				</main>
 			</div>

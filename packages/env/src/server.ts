@@ -24,6 +24,12 @@ export const env = createEnv({
 				message: "AI_OPS_QUEUE_URL must be an AWS SQS HTTPS URL",
 			})
 			.optional(),
+		PERFORMANCE_QUEUE_URL: z
+			.url()
+			.refine((value) => value.startsWith("https://sqs."), {
+				message: "PERFORMANCE_QUEUE_URL must be an AWS SQS HTTPS URL",
+			})
+			.optional(),
 		MANAGEMENT_API_ENABLED: z
 			.enum(["true", "false"])
 			.transform((value) => value === "true")

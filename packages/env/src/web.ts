@@ -10,6 +10,18 @@ export const env = createEnv({
 			.string()
 			.regex(/^preview-[0-9a-f]{12}$/)
 			.optional(),
+		VITE_PERFORMANCE_ENABLED: z
+			.enum(["true", "false"])
+			.transform((value) => value === "true")
+			.default(false),
+		VITE_APP_ENVIRONMENT: z
+			.string()
+			.regex(/^[A-Za-z0-9._-]+$/)
+			.default("development"),
+		VITE_APP_RELEASE: z
+			.string()
+			.regex(/^[A-Za-z0-9._-]+$/)
+			.default("local"),
 	},
 	runtimeEnv: (
 		import.meta as ImportMeta & {
