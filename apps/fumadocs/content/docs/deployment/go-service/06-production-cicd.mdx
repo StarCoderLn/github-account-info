@@ -10,13 +10,13 @@ icon: Workflow
 
 ```mermaid
 flowchart LR
-  Push[master push<br/>指定路径] --> CB[CodeBuild]
-  CB --> Test[gofmt + verify + vet + test]
-  Test --> Image[build + ECR push<br/>prod-fullSHA]
-  Image --> Deploy[CloudFormation deploy]
-  Deploy --> Stable[ECS services-stable]
-  Stable --> Smoke[/healthz + /readyz]
-  Smoke -->|失败| Rollback[恢复上一 ImageTag]
+  Push["master push<br/>指定路径"] --> CB["CodeBuild"]
+  CB --> Test["gofmt + verify + vet + test"]
+  Test --> Image["build + ECR push<br/>prod-fullSHA"]
+  Image --> Deploy["CloudFormation deploy"]
+  Deploy --> Stable["ECS services-stable"]
+  Stable --> Smoke["/healthz + /readyz"]
+  Smoke -->|"失败"| Rollback["恢复上一 ImageTag"]
 ```
 
 ## 1. 创建 GitHub CodeConnection

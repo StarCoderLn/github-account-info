@@ -1,8 +1,16 @@
 import { z } from "zod";
 
+/**
+ * Performance 全链路共享契约。
+ *
+ * 浏览器 SDK 只通过 `import type` 使用本包，避免把 Zod 打入监控 chunk；
+ * Node 接收层与 ECS processor 则在运行时使用这些 schema 做两次独立校验。
+ */
 export const PERFORMANCE_SCHEMA_VERSION = 1 as const;
+// HTTP 单批上限大于 SDK 默认批量，给重试和其他受信客户端保留空间。
 export const PERFORMANCE_BATCH_MAX_EVENTS = 50;
 export const PERFORMANCE_SDK_BATCH_SIZE = 20;
+// 浏览器内存队列必须有界，监控链路不可反过来拖垮被监控页面。
 export const PERFORMANCE_SDK_QUEUE_LIMIT = 100;
 
 export const performanceMetricNames = [
@@ -34,6 +42,7 @@ const routeSchema = z
 	});
 
 const baseEventShape = {
+	// eventId 用于数据库幂等；sessionId 仅用于匿名会话聚合，不代表登录身份。
 	schemaVersion: z.literal(PERFORMANCE_SCHEMA_VERSION),
 	eventId: z.uuid(),
 	occurredAt: z.iso.datetime({ offset: true }),
@@ -54,6 +63,7 @@ export const webVitalEventSchema = z
 	})
 	.strict()
 	.superRefine((event, context) => {
+		// CLS 表示布局偏移程度，是没有时间单位的评分；其他 Web Vitals 使用毫秒。
 		const expectedUnit = event.name === "CLS" ? "score" : "ms";
 		if (event.unit !== expectedUnit) {
 			context.addIssue({
@@ -123,6 +133,7 @@ export const performanceBatchSchema = z
 	.strict();
 
 export const cleanedPerformanceEventSchema = z.object({
+	// 清洗后使用统一、可落库的 nullable 字段，避免每种事件维护独立数据表。
 	...baseEventShape,
 	type: z.enum(["web-vital", "page-view", "resource", "error", "custom"]),
 	name: z.string().min(1).max(128),
@@ -138,6 +149,7 @@ export const performanceRangeSchema = z.enum(["1h", "24h", "7d"]);
 
 export const performanceOverviewInputSchema = z
 	.object({
+		// 所有筛选都在服务端参与 SQL 条件，页面不下载原始事件再自行聚合。
 		range: performanceRangeSchema.default("24h"),
 		environment: identifierSchema.optional(),
 		release: identifierSchema.optional(),

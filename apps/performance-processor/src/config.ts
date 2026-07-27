@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+// Processor 启动时一次性校验全部运行参数，避免消费到一半才发现队列或数据库配置错误。
 const configSchema = z.object({
 	AWS_REGION: z.string().min(1).default("us-east-2"),
 	PERFORMANCE_PROCESSOR_MODE: z
@@ -7,6 +8,7 @@ const configSchema = z.object({
 		.default("processor"),
 	PERFORMANCE_QUEUE_URL: z
 		.url()
+		// 限制为 AWS SQS HTTPS 地址，避免错误配置把内部数据发送到任意 URL。
 		.refine((value) => value.startsWith("https://sqs.")),
 	DATABASE_URL: z.string().min(1),
 	RDS_CA_BUNDLE: z.string().min(1).default("/app/certs/rds-bundle.pem"),
@@ -24,5 +26,6 @@ export type ProcessorConfig = z.infer<typeof configSchema>;
 export function loadConfig(
 	source: Record<string, string | undefined> = process.env,
 ): ProcessorConfig {
+	// parse 失败会阻止进程启动，由 ECS 健康状态和日志暴露配置问题。
 	return configSchema.parse(source);
 }

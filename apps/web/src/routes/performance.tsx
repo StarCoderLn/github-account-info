@@ -46,6 +46,12 @@ import {
 import { useMemo, useState } from "react";
 import { trpc } from "@/utils/trpc";
 
+/**
+ * 真实用户性能可视化页面。
+ *
+ * 服务端已经完成聚合和评级，这里只维护筛选状态、后台刷新状态以及展示逻辑；
+ * 不在浏览器重新计算百分位，避免前后端出现不同的统计口径。
+ */
 export const Route = createFileRoute("/performance")({
 	component: PerformancePage,
 });
@@ -126,6 +132,7 @@ const METRIC_STYLES: Record<
 };
 
 function ratingClassName(metric: Metric): string {
+	// 评级颜色只负责呈现，具体阈值统一由 performance-stats 服务端维护。
 	if (metric.rating === "poor") {
 		return "bg-red-50 text-red-600 ring-red-100";
 	}
@@ -140,6 +147,7 @@ function formatMetric(name: MetricName, value: number | null): string {
 		return "暂无数据";
 	}
 	if (name === "CLS") {
+		// CLS 是没有时间单位的布局偏移评分，不能附加 ms 或 s。
 		return value.toFixed(3);
 	}
 	if (value >= 1_000) {
@@ -162,6 +170,7 @@ function MetricCard({ metric }: { metric: Metric }) {
 	const StatusIcon = metric.rating === "poor" ? TriangleAlert : CircleCheck;
 	const styles = METRIC_STYLES[metric.name];
 	const distribution = [metric.p50, metric.p75, metric.p95];
+	// 微型柱只表达当前指标内部的 p50/p75/p95 相对分布，不用于跨指标比较。
 	const distributionMax = Math.max(
 		...distribution.map((value) => value ?? 0),
 		1,
@@ -354,6 +363,7 @@ function TrendChart({
 	const max = Math.max(...points.map((point) => point.p75), 1) * 1.2;
 	const coordinates = points.map((point, index) => ({
 		x:
+			// 单个时间桶居中展示；放在普通折线起点会制造大片空白和虚假趋势感。
 			points.length === 1
 				? width / 2
 				: horizontalPadding +
@@ -427,6 +437,7 @@ function TrendChart({
 						/>
 					</>
 				) : (
+					// 单样本使用水平参考线提供量级语境，但不暗示数值发生过变化。
 					<line
 						x1={horizontalPadding}
 						y1={coordinates[0]?.y}
@@ -472,6 +483,7 @@ function TrendChart({
 }
 
 function LoadingDashboard() {
+	// 该骨架只用于第一次进入且尚无任何成功数据的场景。
 	return (
 		<div
 			className="flex flex-col gap-6"
@@ -490,6 +502,7 @@ function LoadingDashboard() {
 }
 
 function PerformancePage() {
+	// activeMetric 仅切换本地趋势图，不会触发新的统计请求。
 	const [range, setRange] = useState<Range>("24h");
 	const [activeMetric, setActiveMetric] = useState<MetricName>("LCP");
 	const [environment, setEnvironment] = useState("");
@@ -502,14 +515,17 @@ function PerformancePage() {
 			release: release || undefined,
 			route: route || undefined,
 		}),
+		// 筛选 key 改变时保留上一份成功数据，后台请求期间不卸载整页。
 		placeholderData: keepPreviousData,
 		meta: { suppressGlobalErrorToast: true },
 	});
 
+	// 只有首次请求且没有缓存数据时才显示整页 loading。
 	if (overviewQuery.isPending) {
 		return <LoadingDashboard />;
 	}
 
+	// 后台刷新失败且仍有旧数据时继续展示；完全无数据才进入错误页。
 	if (!overviewQuery.data) {
 		return (
 			<Card>
@@ -536,6 +552,7 @@ function PerformancePage() {
 
 	return (
 		<div className="flex flex-col gap-5">
+			{/* 页面总览：展示当前筛选结果的访问量、指标覆盖和健康状态。 */}
 			<section className="relative overflow-hidden rounded-[28px] bg-gradient-to-br from-blue-600 via-blue-600 to-indigo-700 text-white shadow-blue-200/50 shadow-xl">
 				<div
 					className="pointer-events-none absolute -top-32 right-12 size-80 rounded-full bg-cyan-300/25 blur-3xl"
@@ -638,6 +655,7 @@ function PerformancePage() {
 							)}
 							aria-live="polite"
 						>
+							{/* 后台更新只显示轻量状态，旧统计和当前滚动位置保持不变。 */}
 							{overviewQuery.isFetching
 								? "正在更新…"
 								: overviewQuery.isError
@@ -738,6 +756,7 @@ function PerformancePage() {
 				aria-labelledby="web-vitals-title"
 				className="flex flex-col gap-3"
 			>
+				{/* 五张卡片固定按共享协议顺序展示，没有样本的指标也不会消失。 */}
 				<div className="flex items-end justify-between gap-4">
 					<div>
 						<p className="font-medium text-blue-600 text-xs tracking-[0.16em]">
@@ -791,6 +810,7 @@ function PerformancePage() {
 			</section>
 
 			<section className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)]">
+				{/* 趋势和健康概览共享同一份 overview 数据，不产生额外网络请求。 */}
 				<Card className="overflow-hidden rounded-2xl bg-white shadow-sm ring-blue-100">
 					<CardHeader className="border-blue-100 border-b bg-gradient-to-r from-blue-50/80 to-transparent">
 						<CardTitle className="flex items-center gap-2">
@@ -884,6 +904,7 @@ function PerformancePage() {
 			</section>
 
 			<Card className="gap-0 overflow-hidden rounded-2xl bg-white py-0 shadow-sm ring-blue-100">
+				{/* 每行同时呈现访问量和五项 p75，便于确定优先优化的页面。 */}
 				<CardHeader className="border-blue-100 border-b bg-gradient-to-r from-blue-50/70 to-transparent py-4">
 					<CardTitle className="flex items-center gap-2">
 						<Layers3 className="size-4 text-blue-600" aria-hidden="true" />
@@ -935,6 +956,7 @@ function PerformancePage() {
 			</Card>
 
 			<div className="grid gap-3 md:grid-cols-2">
+				{/* 两张短列表按自身内容高度展示，空状态不再撑出大片空白。 */}
 				<Card className="gap-0 self-start overflow-hidden rounded-2xl bg-white py-0 shadow-sm ring-cyan-100">
 					<CardHeader className="border-cyan-100 border-b bg-gradient-to-r from-cyan-50/80 to-transparent py-4">
 						<CardTitle className="flex items-center gap-2">

@@ -33,6 +33,27 @@ infra/performance.yaml        # Queue/DLQ/ECR/ECS/LogGroup/Alarm
 共享 package 只包含纯 schema 或浏览器 SDK，不包含 AWS client、数据库连接和部署
 配置。所有 AWS 副作用保留在可部署 app/service 中。
 
+### 代码导读
+
+按一次页面访问从产生到展示的顺序阅读：
+
+1. `packages/performance-schema/src/index.ts`：定义事件、批次、清洗结果和统计筛选
+   的共享契约；CLS 使用无单位 `score`，其他 Web Vitals 使用 `ms`。
+2. `packages/performance-sdk/src/monitor.ts`：浏览器 Performance SDK（RUM）的采样、
+   Web Vitals observer、访问/错误/请求采集、内存队列、批量发送和一次重试。
+3. `apps/web/src/utils/performance-monitor.ts` 与 `apps/web/src/main.tsx`：按环境开关
+   延迟加载 SDK，并把 TanStack Router 的真实 SPA path change 转成 page-view。
+4. `apps/server/src/routes/performance.ts` 与
+   `packages/api/src/services/performance-ingest.ts`：限制匿名请求体、校验协议并将
+   批次写入 SQS；HTTP 202 只表示成功入队。
+5. `apps/performance-processor/src/clean.ts`、`processor.ts`、`repository.ts`：ECS
+   consumer 二次校验、脱敏、规范化、区分永久/暂时错误，并以 event ID 幂等入库。
+6. `packages/db/src/schema/performance-event.ts`：原始清洗样本表和三组统计索引。
+7. `packages/api/src/services/performance-stats.ts`：直接用 PostgreSQL 原始样本计算
+   p50/p75/p95、访问量、错误、趋势、路由对比和处理延迟。
+8. `apps/web/src/routes/performance.tsx`：展示五项 Web Vitals 和辅助统计；筛选改变
+   时保留上一份成功数据并后台更新，避免整页白屏。
+
 ## 事件协议
 
 每个事件包含：

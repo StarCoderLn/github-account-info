@@ -34,6 +34,7 @@ const RANGE_INTERVALS = {
 	"7d": "7 days",
 } as const;
 
+// 当前阈值用于页面状态分级；CLS 是无单位评分，其他指标的阈值单位均为毫秒。
 const RATING_THRESHOLDS: Record<
 	PerformanceMetricName,
 	{ good: number; poor: number }
@@ -46,6 +47,7 @@ const RATING_THRESHOLDS: Record<
 };
 
 function numberValue(value: unknown): number | null {
+	// PostgreSQL 驱动可能把聚合结果返回为字符串，在服务边界统一归一化。
 	if (value === null || value === undefined) {
 		return null;
 	}
@@ -75,6 +77,7 @@ function rating(
 }
 
 function filters(input: PerformanceOverviewInput): SQL {
+	// 所有筛选值通过 Drizzle sql 模板绑定参数，不能拼接用户输入。
 	const conditions: SQL[] = [
 		sql`app_id = 'github-account-info-web'`,
 		sql`occurred_at >= NOW() - ${RANGE_INTERVALS[input.range]}::interval`,
@@ -96,6 +99,7 @@ export async function getPerformanceOverview(
 	input: PerformanceOverviewInput,
 ) {
 	const where = filters(input);
+	// 观察范围越长时间桶越粗，控制返回点数并保持图表可读。
 	const bucket =
 		input.range === "1h"
 			? sql`date_trunc('minute', occurred_at)`
@@ -103,6 +107,7 @@ export async function getPerformanceOverview(
 				? sql`date_trunc('hour', occurred_at)`
 				: sql`date_trunc('day', occurred_at)`;
 
+	// 七组统计互不依赖，并行查询降低可视化页面的整体等待时间。
 	const [
 		metricResult,
 		summaryResult,
@@ -114,6 +119,7 @@ export async function getPerformanceOverview(
 	] = await Promise.all([
 		database.execute(sql`
 			SELECT metric_name,
+				-- 百分位直接基于原始样本计算；不能把多个批次的 p75 再求平均。
 				percentile_cont(0.50) WITHIN GROUP (ORDER BY metric_value) AS p50,
 				percentile_cont(0.75) WITHIN GROUP (ORDER BY metric_value) AS p75,
 				percentile_cont(0.95) WITHIN GROUP (ORDER BY metric_value) AS p95,
@@ -146,6 +152,7 @@ export async function getPerformanceOverview(
 		`),
 		database.execute(sql`
 			SELECT route,
+				-- 页面访问量来自 page-view 事件，不拿 Web Vital 样本数代替访问次数。
 				COUNT(*) FILTER (WHERE event_type = 'page-view') AS visits,
 				percentile_cont(0.75) WITHIN GROUP (ORDER BY metric_value)
 					FILTER (WHERE metric_name = 'LCP') AS lcp,
@@ -182,6 +189,7 @@ export async function getPerformanceOverview(
 			LIMIT 10
 		`),
 		database.execute(sql`
+			-- 筛选项固定回看七天，避免当前筛选条件把可选值本身过滤掉。
 			SELECT
 				ARRAY_REMOVE(ARRAY_AGG(DISTINCT environment), NULL) AS environments,
 				ARRAY_REMOVE(ARRAY_AGG(DISTINCT release), NULL) AS releases,
@@ -194,6 +202,7 @@ export async function getPerformanceOverview(
 
 	const metricRows = rows(metricResult) as MetricRow[];
 	const metricMap = new Map(metricRows.map((row) => [row.metric_name, row]));
+	// 始终按协议定义返回五项指标；没有样本时也保留卡片位置并返回 null。
 	const metrics = performanceMetricNames.map((name) => {
 		const row = metricMap.get(name);
 		const p75 = numberValue(row?.p75);
@@ -211,6 +220,7 @@ export async function getPerformanceOverview(
 	const pageViews = numberValue(summary.page_views) ?? 0;
 	const errorCount = numberValue(summary.error_count) ?? 0;
 
+	// 返回结构已经是页面需要的视图模型，React 层只负责格式化和交互。
 	return {
 		range: input.range,
 		metrics,
@@ -218,6 +228,7 @@ export async function getPerformanceOverview(
 			pageViews,
 			sessions: numberValue(summary.sessions) ?? 0,
 			errorCount,
+			// 当前作业将“错误事件数 / 页面访问事件数”作为前端错误率口径。
 			errorRate: pageViews === 0 ? 0 : (errorCount / pageViews) * 100,
 			processingLagP75: numberValue(summary.processing_lag_p75),
 		},

@@ -12,6 +12,7 @@ export type PerformanceQueue = {
 	send(batch: PerformanceBatch): Promise<void>;
 };
 
+// 用最小接口隔离 AWS SDK，单元测试无需连接真实 SQS。
 type SqsSender = {
 	send(command: SendMessageCommand): Promise<unknown>;
 };
@@ -38,6 +39,7 @@ export function createSqsPerformanceQueueWithClient(
 ): PerformanceQueue {
 	return {
 		async send(batch) {
+			// 一个 SQS message 对应一个已校验 batch，processor 可按批次原子入库和重试。
 			await client.send(
 				new SendMessageCommand({
 					QueueUrl: queueUrl,
@@ -57,10 +59,12 @@ export async function ingestPerformanceBatch(
 			"performance ingestion is not configured",
 		);
 	}
+	// 浏览器输入不可信；只有共享契约校验通过的数据才允许进入异步链路。
 	const result = performanceBatchSchema.safeParse(input);
 	if (!result.success) {
 		throw new InvalidPerformanceBatchError("invalid performance event batch");
 	}
 	await queue.send(result.data);
+	// accepted 是成功入队的事件数，不代表这些事件已经清洗或写入数据库。
 	return { accepted: result.data.events.length };
 }

@@ -49,6 +49,7 @@ function MermaidContent({ chart }: { chart: string }) {
 
     async function renderDiagram() {
       const { default: mermaid } = await loadMermaid();
+      const source = chart.replaceAll("\\n", "\n");
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: "strict",
@@ -56,10 +57,10 @@ function MermaidContent({ chart }: { chart: string }) {
         theme,
       });
 
-      const result = await mermaid.render(
-        renderId,
-        chart.replaceAll("\\n", "\n"),
-      );
+      // parse() 不操作 DOM。先完成纯语法校验，避免 render() 在失败时把 Mermaid
+      // 自带的 error SVG 追加到 document.body，污染文档底部。
+      await mermaid.parse(source);
+      const result = await mermaid.render(renderId, source);
 
       if (active) setRendered(result);
     }

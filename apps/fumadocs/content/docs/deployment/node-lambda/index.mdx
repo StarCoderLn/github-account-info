@@ -4,66 +4,11 @@ description: 从本地 Node/Hono 服务迁移到 Lambda、RDS 与 Cloudflare Pag
 icon: Cloud
 ---
 
+import architectureSvg from "./assets/architecture.svg";
+
 > 项目：github-account-info（Turborepo + pnpm monorepo）
 > 部署拓扑：前端 Cloudflare Pages + 后端 AWS Lambda（SAM）+ 数据库 AWS RDS PostgreSQL（私有子网）
 > 记录时间：2026-07
-
----
-
-## 目录
-
-**第一部分：架构与实施**
-
-1. [整体架构与部署链路](#1-整体架构与部署链路)
-   - [1.1 全景架构图](#11-全景架构图)
-   - [1.2 一次页面访问的完整请求链路](#12-一次页面访问的完整请求链路)
-   - [1.3 组件清单](#13-组件清单)
-   - [1.4 本地入口与云上入口：一套业务，两个装配](#14-本地入口与云上入口一套业务两个装配)
-   - [1.5 四条部署/开发链路](#15-四条部署开发链路)
-   - [1.6 网络与安全边界](#16-网络与安全边界)
-2. [部署实施过程：当初的计划与每一步的落地](#2-部署实施过程当初的计划与每一步的落地)
-   - [2.1 出发点：可行性分析先行](#21-出发点可行性分析先行)
-   - [2.2 当初列的六步计划](#22-当初列的六步计划)
-   - [2.3 每一步实际是怎么做的](#23-每一步实际是怎么做的)
-     - [步骤 1：改代码（双入口 + 换驱动 + 打包脚本）](#步骤-1改代码双入口--换驱动--打包脚本)
-     - [步骤 2：本地验证](#步骤-2本地验证)
-     - [步骤 3：控制台手动创建网络与 RDS（8 个子步骤）](#步骤-3控制台手动创建网络与-rds)
-     - [步骤 4：写 SAM template.yaml（逐行注释 + samconfig.toml）](#步骤-4写-sam-templateyaml)
-     - [步骤 5：sam deploy 部署 Lambda](#步骤-5sam-deploy-部署-lambda)
-     - [步骤 6：配 Cloudflare Pages](#步骤-6配-cloudflare-pages)
-   - [2.4 计划之外追加的三件事](#24-计划之外追加的三件事)
-   - [2.5 回头看这份计划](#25-回头看这份计划)
-
-**第二部分：部署与 CI/CD**
-
-3. [AWS Lambda 部署：环境变量不走 .env](#3-aws-lambda-部署环境变量不走-env)
-4. [GitHub Actions + OIDC：免密钥部署 AWS（deploy.yml 逐行注释）](#4-github-actions--oidc免密钥部署-aws)
-5. [本地开发连私有子网 RDS：SSM 隧道](#5-本地开发连私有子网-rdsssm-隧道)
-
-**第三部分：踩坑实录**
-
-6. [ESM import 提升：dotenv 为什么失效](#6-esm-import-提升dotenv-为什么失效)
-7. [Node.js --env-file：last-wins 语义](#7-nodejs---env-filelast-wins-语义)
-8. [pg 8.22 的 SSL 大坑：sslmode=require 语义变了](#8-pg-822-的-ssl-大坑sslmoderequire-语义变了)
-   - [8.1 sslmode=require 语义变更](#81-pg8220-起-sslmoderequire--完整证书校验)
-   - [8.2 连接串 sslmode 覆盖 Pool 选项](#82-连接串里的-sslmode-会覆盖-pool-的-ssl-选项)
-   - [8.3 RDS 强制 SSL](#83-rds-强制-ssl不能干脆禁用)
-   - [8.4 最终解法](#84-最终解法)
-9. [浏览器报 CORS 错误 ≠ 真的是 CORS 问题](#9-浏览器报-cors-错误--真的是-cors-问题)
-10. [Cloudflare Pages 自动部署的坑](#10-cloudflare-pages-自动部署的坑)
-    - [10.1 连续快速 push 会取消前一次构建](#101-连续快速-push-会取消前一次构建)
-    - [10.2 monorepo 下 Watch Paths 不可靠](#102-monorepo-下-build-watch-paths-不可靠重点坑)
-    - [10.3 部署单位是分支最新代码](#103-部署单位是分支最新代码不是逐个提交)
-11. [CloudFormation 并发部署：OBSOLETE changeset](#11-cloudformation-并发部署obsolete-changeset)
-
-**第四部分：前端与总结**
-
-12. [前端 TanStack Query 交互经验](#12-前端-tanstack-query-交互经验)
-    - [12.1 删除交互的"中间态"bug](#121-删除交互的中间态bug)
-    - [12.2 refetchOnWindowFocus](#122-refetchonwindowfocus)
-    - [12.3 隐式的自动同步会破坏用户心智模型](#123-隐式的自动同步会破坏用户心智模型)
-13. [错误速查表](#13-错误速查表)
-14. [通用方法论沉淀](#14-通用方法论沉淀)
 
 ---
 
@@ -73,7 +18,7 @@ icon: Cloud
 
 ![github-account-info 整体架构图](./assets/architecture.png)
 
-> 源文件：[architecture.svg](./assets/architecture.svg)（矢量图，可编辑）。下面的 Mermaid 版本可以直接在文档站渲染与修改。
+> 源文件：<a href={architectureSvg.src}>architecture.svg</a>（矢量图，可编辑）。下面的 Mermaid 版本可以直接在文档站渲染与修改。
 
 ```mermaid
 flowchart TB

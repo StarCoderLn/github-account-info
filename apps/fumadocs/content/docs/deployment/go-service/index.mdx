@@ -1,8 +1,27 @@
 ---
-title: 目标架构与实施路线
+title: Go 服务部署与容器平台
 description: 理解为什么引入 Go、为什么选择 ECS/Fargate，以及整条部署路线的先后依赖
 icon: Route
 ---
+
+这组笔记记录项目如何在保留 Node Lambda 的同时，引入 Go API、ECS/Fargate、
+Internal ALB、Cloud Map、Production CI/CD 和每个 PR 的 Preview 环境。它是一套
+按真实依赖顺序组织的容器平台实施手册。
+
+<Callout title="当前记录范围">
+  Go 应用、数据库与 Secret、共享网络、Production ECS、VPC Link、Cloud Map、
+  CI/CD、PR Preview、监控、清理和排障分别记录在后续十章。每章的“完成标准”用于
+  核对阶段结果；云上实时状态仍以 CloudFormation、ECS、ALB 和 CodeBuild 为准。
+</Callout>
+
+## 先看结论
+
+1. Go 服务不是重写 Node，而是用渐进式拆分接管个人介绍能力。
+2. ECS/Fargate 用来运行容器，不用维护 EC2，也没有引入当前规模不需要的 Kubernetes。
+3. 公开请求经 API Gateway、VPC Link 和 Internal ALB 进入 Go。
+4. Node Lambda 的内部写请求经 Cloud Map 找到动态变化的 Go Task。
+5. Production 使用不可变 SHA 镜像；PR Preview 隔离路由、服务和数据库 schema。
+6. CloudFormation 是基础设施事实来源，变更先创建 Change Set、审查后再执行。
 
 ## 最终目标
 
@@ -90,4 +109,9 @@ git --version
 
 ## 如何使用后续章节
 
-每章都包含操作、成功信号和失败处理。第一次搭建时按顺序执行；以后复习时可先看每章的“完成标准”。线上紧急故障以 `infra/RUNBOOK.md` 的当前命令为准，本教程用于理解为什么要执行它们。
+每章都先说明本阶段目标，再给出操作、成功信号、失败处理和完成标准。这与其他四个
+模块的“结论 → 架构 → 实现 → 部署 → 验收 → 排障”主线一致，只是 Go 涉及的资源
+更多，因此拆成多页。
+
+第一次搭建时按左侧顺序执行；以后复习时可先看每章的“完成标准”。线上紧急故障以
+`infra/RUNBOOK.md` 的当前命令为准，本教程用于理解为什么要执行它们。
