@@ -87,6 +87,22 @@ Resources:
               - ecs:UntagResource
               - ecs:UpdateService
             Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${FoundationProjectName}/${ProjectName}
+          - Sid: RunOnlyPerformanceMigrationTask
+            Effect: Allow
+            Action:
+              - ecs:RunTask
+            Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${ProjectName}:*
+            Condition:
+              ArnEquals:
+                ecs:cluster:
+                  Fn::ImportValue: !Sub ${FoundationProjectName}-EcsClusterArn
+          - Sid: ObserveAndStopOnlyPerformanceTasks
+            Effect: Allow
+            Action:
+              - ecs:DescribeTasks
+              - ecs:StopTask
+              - ecs:TagResource
+            Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/${FoundationProjectName}/*
           - Sid: ManagePerformanceTaskDefinitions
             Effect: Allow
             Action:

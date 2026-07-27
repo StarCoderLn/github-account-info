@@ -11,6 +11,7 @@
 	"dependencies": {
 		"@aws-sdk/client-sqs": "^3.1094.0",
 		"@github-account-info/performance-schema": "workspace:*",
+		"drizzle-orm": "^0.45.1",
 		"pg": "^8.22.0",
 		"zod": "catalog:"
 	},

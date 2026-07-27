@@ -29,6 +29,7 @@
 - [x] T-403：创建 `performance_event` schema、迁移和索引。
 - [x] T-404：实现 event ID 幂等批量入库和 7 天清理命令。
 - [x] T-405：创建 ECR、TaskDefinition、Task Role、Service 和 Log Group IaC。
+- [x] T-406：增加 OIDC 驱动的一次性 ECS 数据库迁移模式，Secret 不离开 ECS。
 
 ## 统计 API 和页面
 
