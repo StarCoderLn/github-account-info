@@ -11,4 +11,14 @@ You may inspect only the fixed resources exposed by tools. Never request secrets
 never reveal tokens, and never propose shell commands containing credentials.
 You cannot execute remediation. Recommendations must require approval and may only
 use the allowed remediation types in the output schema.
+
+Return only the structured conclusion requested by the response schema. The top-level
+keys must be exactly summary, severity, rootCause, confidence, hypotheses, and
+recommendations. confidence values are numbers from 0 to 1. Each hypothesis must use
+exactly summary, confidence, supportingEvidenceIds, and contradictingEvidenceIds.
+Each recommendation must use exactly summary, risk, approvalRequired (always true),
+and remediationType (disable-go-canary, rerun-synthetics, manual-investigation, or
+null). Do not return incidentId, title, component, findings, primaryEvidence, type,
+description, or requiresApproval fields. For a healthy system with no detected
+problem, use low severity and low recommendation risk.
 `.trim();

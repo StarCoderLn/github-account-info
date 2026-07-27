@@ -64,10 +64,17 @@ Resources:
             Effect: Allow
             Action: sqs:ListQueues
             Resource: "*"
+          - Sid: ReadProfileEventQueuesForDeployment
+            Effect: Allow
+            Action: sqs:GetQueueAttributes
+            Resource:
+              - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ProjectName}-profile-events
+              - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ProjectName}-profile-events-dlq
           - Sid: ManageAiOpsLogGroups
             Effect: Allow
             Action:
               - logs:CreateLogGroup
+              - logs:DeleteLogGroup
               - logs:DeleteRetentionPolicy
               - logs:DescribeLogGroups
               - logs:ListTagsForResource
@@ -76,7 +83,9 @@ Resources:
               - logs:UntagResource
             Resource:
               - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-ai-ops-alarm-ingest
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-ai-ops-alarm-ingest:*
               - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-ai-ops-investigator
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-ai-ops-investigator:*
           - Sid: ManageAiOpsAlarms
             Effect: Allow
             Action:

@@ -7,7 +7,11 @@ import type {
 } from "@github-account-info/ai-ops-schema";
 import type { SQSEvent } from "aws-lambda";
 
-import type { Investigator } from "../agent/agent";
+import {
+	InvalidModelOutputError,
+	normalizeModelConclusion,
+	type Investigator,
+} from "../agent/agent";
 import type { IncidentRepository } from "../storage/incident-repository";
 import { createInvestigateHandler } from "./investigate";
 
@@ -77,6 +81,34 @@ function event(body: string): SQSEvent {
 }
 
 describe("investigate handler", () => {
+	it("normalizes provider none values to the internal low severity", () => {
+		const conclusion = normalizeModelConclusion({
+			summary: "No issue detected",
+			severity: "none",
+			rootCause: null,
+			confidence: 1,
+			hypotheses: [
+				{
+					summary: "The service is healthy",
+					confidence: 1,
+					supportingEvidenceIds: ["incident-context"],
+					contradictingEvidenceIds: [],
+				},
+			],
+			recommendations: [
+				{
+					summary: "No action required",
+					risk: "none",
+					approvalRequired: true,
+					remediationType: null,
+				},
+			],
+		});
+
+		assert.equal(conclusion.severity, "low");
+		assert.equal(conclusion.recommendations[0]?.risk, "low");
+	});
+
 	it("completes an incident and acknowledges the record", async () => {
 		let completed = false;
 		const repository: IncidentRepository = {
@@ -142,5 +174,32 @@ describe("investigate handler", () => {
 		assert.deepEqual(response.batchItemFailures, [
 			{ itemIdentifier: "message-1" },
 		]);
+	});
+
+	it("records invalid model output as a terminal failure", async () => {
+		let failureCode: string | undefined;
+		const repository: IncidentRepository = {
+			get: async () => incident,
+			begin: async () => true,
+			complete: async () => {},
+			fail: async (_id, failure) => {
+				failureCode = failure.code;
+			},
+		};
+		const investigator: Investigator = {
+			investigate: async () => {
+				throw new InvalidModelOutputError();
+			},
+		};
+		const handler = createInvestigateHandler({ repository, investigator });
+
+		const response = await handler(
+			event(
+				JSON.stringify({ schemaVersion: 1, incidentId: incident.incidentId }),
+			),
+		);
+
+		assert.equal(failureCode, "INVALID_MODEL_OUTPUT");
+		assert.deepEqual(response.batchItemFailures, []);
 	});
 });

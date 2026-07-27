@@ -111,6 +111,7 @@ Resources:
         CloudWatchAlarm:
           Type: EventBridgeRule
           Properties:
+            RuleName: !Sub ${ProjectName}-ai-ops-cloudwatch-alarms
             Pattern:
               source:
                 - aws.cloudwatch
@@ -132,7 +133,6 @@ Resources:
       CodeUri: ../apps/ai-ops-agent/dist/
       MemorySize: 512
       Timeout: 300
-      ReservedConcurrentExecutions: 1
       LoggingConfig:
         LogFormat: JSON
       Environment:
@@ -192,7 +192,9 @@ Resources:
           Type: SQS
           Properties:
             Queue: !GetAtt InvestigationQueue.Arn
-            BatchSize: 5
+            BatchSize: 1
+            ScalingConfig:
+              MaximumConcurrency: 2
             FunctionResponseTypes:
               - ReportBatchItemFailures
 

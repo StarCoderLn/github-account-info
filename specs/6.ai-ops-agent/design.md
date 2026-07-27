@@ -258,7 +258,9 @@ ssm:SendCommand
 
 - DynamoDB PAY_PER_REQUEST + TTL。
 - SQS batch size 1。
-- Agent Lambda reserved concurrency 1、timeout 300 秒。
+- Agent Lambda 不设置 reserved concurrency，避免低配额账号因“至少保留 10 个
+  unreserved concurrency”而拒绝创建；SQS event source 使用
+  `MaximumConcurrency: 2`、`BatchSize: 1`，timeout 300 秒。
 - 五分钟告警去重。
 - 固定模型/工具调用上限。
 - 工具先聚合再送模型。

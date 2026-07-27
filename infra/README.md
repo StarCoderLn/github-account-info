@@ -86,7 +86,8 @@ tool calling 的公开 model ID。先创建 AI Ops change set 并审查，执行
 `AiOps*` 参数。四个参数默认均为空，因此在接入前不会改变现有 API 行为。
 
 AI Ops 的 DynamoDB、两条 SQS 队列和 Lambda 均按使用量计费；GitHub Models 免费
-额度有频率限制。Agent reserved concurrency 固定为 1，单次最多 4 个模型 step 和
+额度有频率限制。Agent 不占用账号 reserved concurrency，SQS event source 的
+`MaximumConcurrency` 固定为 2、`BatchSize` 固定为 1；单次最多 4 个模型 step 和
 6 次工具调用，429/5xx 由 SQS 重试。
 
 当前推荐模型是 `openai/gpt-4.1`，GitHub catalog 明确标注其支持 tool calling。
@@ -119,7 +120,13 @@ AI Ops Stack，不使用账号 root 凭证。
    input，也不会输出。
 4. 运行 `create-agent-change-set`，工作流会构建 Agent、查询现有 profile queue，
    再创建待审 Agent Change Set。
-5. 审查资源、IAM 和费用后，运行 `execute-agent-change-set`。
+5. 审查资源、IAM 和费用后，运行 `execute-agent-change-set`。执行前 workflow
+   读取 stack 状态；`REVIEW_IN_PROGRESS` 走 create waiter，其余已有 stack 走
+   update waiter，并等待 CloudFormation 最终状态。
+6. 只有首次创建失败且 stack 处于 `ROLLBACK_COMPLETE` 或 `CREATE_FAILED` 时，
+   才能运行 `delete-failed-agent-stack`；该操作会拒绝删除健康 stack，并在 stack
+   删除完成后精确清理因 `DeletionPolicy: Retain` 遗留的 AI Ops 事件表和两个
+   Lambda 日志组，不删除模型 Secret、部署策略栈或其他项目资源。
 
 执行操作与创建 Change Set 是两个独立的手工选择，不存在 push 自动部署路径。
 

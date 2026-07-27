@@ -14,6 +14,7 @@ on:
           - create-model-secret
           - create-agent-change-set
           - execute-agent-change-set
+          - delete-failed-agent-stack
       change_set_name:
         description: Required only for an execute operation
         required: false
@@ -90,9 +91,20 @@ jobs:
             echo "change_set_name is required" >&2
             exit 1
           fi
+          stack_status="$(aws cloudformation describe-stacks \
+            --stack-name github-account-info-ai-ops-deployer-policy \
+            --query "Stacks[0].StackStatus" \
+            --output text)"
           aws cloudformation execute-change-set \
             --stack-name github-account-info-ai-ops-deployer-policy \
             --change-set-name "$CHANGE_SET_NAME"
+          if [[ "$stack_status" == "REVIEW_IN_PROGRESS" ]]; then
+            aws cloudformation wait stack-create-complete \
+              --stack-name github-account-info-ai-ops-deployer-policy
+          else
+            aws cloudformation wait stack-update-complete \
+              --stack-name github-account-info-ai-ops-deployer-policy
+          fi
 
       - name: Create or update GitHub Models Secret
         if: inputs.operation == 'create-model-secret'
@@ -144,6 +156,13 @@ jobs:
           pnpm --filter ai-ops-agent check-types
           pnpm --filter ai-ops-agent test
           pnpm --filter ai-ops-agent build
+          node --input-type=module -e "
+            await Promise.all([
+              import('./apps/ai-ops-agent/dist/investigate.mjs'),
+              import('./apps/ai-ops-agent/dist/alarm-ingest.mjs'),
+            ]);
+            console.log('AI Ops Lambda bundles import successfully');
+          "
           sam validate --template-file infra/ai-ops.yaml --lint
           sam package \
             --template-file infra/ai-ops.yaml \
@@ -226,6 +245,52 @@ jobs:
             echo "change_set_name is required" >&2
             exit 1
           fi
+          stack_status="$(aws cloudformation describe-stacks \
+            --stack-name github-account-info-ai-ops \
+            --query "Stacks[0].StackStatus" \
+            --output text)"
           aws cloudformation execute-change-set \
             --stack-name github-account-info-ai-ops \
             --change-set-name "$CHANGE_SET_NAME"
+          if [[ "$stack_status" == "REVIEW_IN_PROGRESS" ]]; then
+            aws cloudformation wait stack-create-complete \
+              --stack-name github-account-info-ai-ops
+          else
+            aws cloudformation wait stack-update-complete \
+              --stack-name github-account-info-ai-ops
+          fi
+
+      - name: Delete failed Agent Stack
+        if: inputs.operation == 'delete-failed-agent-stack'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stack_name="github-account-info-ai-ops"
+          stack_status="$(aws cloudformation describe-stacks \
+            --stack-name "$stack_name" \
+            --query "Stacks[0].StackStatus" \
+            --output text)"
+          if [[ "$stack_status" != "ROLLBACK_COMPLETE" && "$stack_status" != "CREATE_FAILED" ]]; then
+            echo "Refusing to delete stack in status: $stack_status" >&2
+            exit 1
+          fi
+          aws cloudformation delete-stack --stack-name "$stack_name"
+          aws cloudformation wait stack-delete-complete --stack-name "$stack_name"
+
+          table_name="github-account-info-ai-ops-incidents"
+          if aws dynamodb describe-table --table-name "$table_name" >/dev/null 2>&1; then
+            aws dynamodb delete-table --table-name "$table_name"
+            aws dynamodb wait table-not-exists --table-name "$table_name"
+          fi
+
+          for log_group in \
+            "/aws/lambda/github-account-info-ai-ops-alarm-ingest" \
+            "/aws/lambda/github-account-info-ai-ops-investigator"; do
+            existing_log_group="$(aws logs describe-log-groups \
+              --log-group-name-prefix "$log_group" \
+              --query "logGroups[?logGroupName=='$log_group'].logGroupName | [0]" \
+              --output text)"
+            if [[ "$existing_log_group" == "$log_group" ]]; then
+              aws logs delete-log-group --log-group-name "$log_group"
+            fi
+          done

@@ -203,6 +203,85 @@ token。
 这些结果证明代码、类型、构建和静态基础设施边界通过，不代表真实 AWS/GitHub
 Models 集成已经验收。
 
+2026-07-25 首次真实部署验证：
+
+- `create-model-secret` 成功，GitHub Models token 已写入 Secrets Manager，任务
+  摘要确认没有输出 secret value。
+- `create-agent-change-set` 的构建、类型检查、测试、SAM 校验与打包均成功。
+- 创建 Change Set 前读取现有 profile events Queue ARN 时，OIDC 部署角色因缺少
+  `sqs:GetQueueAttributes` 失败；当时尚未创建 Agent stack 或运行时资源。
+- 修复只为 `${ProjectName}-profile-events` 与
+  `${ProjectName}-profile-events-dlq` 增加 `sqs:GetQueueAttributes`，不授予发送、
+  接收、删除消息或修改队列的权限。
+- 补齐队列读取权限后 Change Set 创建成功；首次执行时 CloudFormation 因日志组
+  ARN 未覆盖 `:log-stream:` 子资源形式而回滚。GitHub Actions 当时未等待 stack
+  完成，曾错误显示 Success。
+- 后续修复为两个固定 AI Ops Log Group 同时声明精确 ARN 与 `:*` ARN，并让
+  Change Set 执行操作等待 stack 最终状态；新增的失败栈清理操作只接受
+  `ROLLBACK_COMPLETE` 或 `CREATE_FAILED`，不能删除健康栈。
+- 第二次创建通过日志组阶段后，账号因 Lambda reserved concurrency 会让
+  unreserved concurrency 低于 AWS 最小值 10 而再次回滚。最终设计移除函数级
+  reserved concurrency，改用 SQS event source 的 `MaximumConcurrency: 2` 与
+  `BatchSize: 1` 控制调查吞吐，避免占用账号预留并发池。
+- CloudFormation 回滚不会删除带 `DeletionPolicy: Retain` 的事件表和两个固定日志组。
+  `delete-failed-agent-stack` 在失败状态守卫通过并删除 stack 后，只精确删除
+  `github-account-info-ai-ops-incidents` 和两个 AI Ops Lambda 日志组；模型 Secret、
+  部署策略栈及其他业务资源保持不变，避免重建时发生同名冲突。
+- 第三次创建时，SAM 为内嵌 `EventBridgeRule` 生成的物理名因长度截断成
+  `github-account-info-ai-op-...`，没有命中部署策略的
+  `github-account-info-ai-ops-*` 资源边界，导致 `events:DescribeRule` 被拒绝。
+  模板现为规则声明固定的 `${ProjectName}-ai-ops-cloudwatch-alarms` 名称，保持
+  IAM 最小权限不变。
+- 固定规则名后，Agent stack 达到 `CREATE_COMPLETE`，14 个独立资源全部
+  `CREATE_COMPLETE`。两支 Lambda 均为 `Active`，SQS event source mapping 为
+  `Enabled`（`BatchSize: 1`、`MaximumConcurrency: 2`、
+  `ReportBatchItemFailures`），EventBridge 规则为 `ENABLED`，事件表为
+  `ACTIVE` 且 PITR/TTL 已启用，两条 AI Ops 告警为 `OK`，主队列与 DLQ 均为空。
+  本次只做只读运行态验收，没有人为触发告警或消耗 GitHub Models 推理额度。
+- 最后一次执行中，AWS 栈已经成功，但 workflow 误从 `describe-change-set` 查询
+  API 不返回的 `ChangeSetType`，得到 `None` 后错误等待 `stack-update-complete`。
+  执行逻辑现改为在执行前读取 stack 状态：`REVIEW_IN_PROGRESS` 使用 create
+  waiter，其他可执行状态使用 update waiter。
+- Node Lambda 的 Canary 部署脚本会在部署时读取 AI Ops stack 的四个非敏感输出
+  （事件表 Name/ARN、调查队列 URL/ARN），再传给 server SAM 参数。stack 不存在时
+  保持空参数以兼容旧环境；stack 已存在但输出不完整时直接失败，避免只注入半套
+  配置。Node 执行角色仅获得指定表的读写权限和指定队列的 `SendMessage`。
+- 端到端接入部署已通过：Node stack 为 `UPDATE_COMPLETE`，四个 AI Ops 参数和
+  Lambda 环境变量均与 Agent stack 输出一致；既有 10% Canary 的 Deploy 步骤在
+  6 分 11 秒后成功，`live` alias 晋级到版本 5 且没有残留附加权重。公开 tRPC
+  `ops.list` 返回 `{ items: [], nextCursor: null }`，证明页面读取链路已经接通。
+  Node role 的 `access-ai-ops-incidents` inline policy 只包含目标表/索引的
+  `GetItem`、`PutItem`、`UpdateItem`、`Query` 和目标队列的 `SendMessage`。
+- 首次受控手工调查证明 API、DynamoDB、SQS 和 event source mapping 已接通，但
+  Investigator 冷启动在加载 bundle 时因顶层 `createRequire` 重复声明而失败，
+  尚未调用 GitHub Models。原因是 esbuild banner 和被打包依赖都声明了同名
+  import。banner 现改用私有别名 `__createRequire`；创建 Change Set 前还会在
+  Node 22 中直接 import 两个最终 `.mjs` 产物，语法或模块初始化失败将阻止部署。
+- bundle 修复后的调查已成功调用 GitHub Models，但模型首次返回了 schema 外的
+  `findings`/`primaryEvidence` 结构。Mastra 的结构化输出校验错误此前未被识别，
+  事件会错误重试；同时 repository 在 investigating 状态移除了 `failure` 字段，
+  与共享 schema 要求的 `failure: null` 冲突，导致 `/ops` 读取 500。现在明确提示
+  唯一允许的输出字段、将结构化校验错误映射为终态 `INVALID_MODEL_OUTPUT`，并在
+  investigating/completed 状态始终保存 `failure: null`。
+- 健康场景下 GitHub Models 会自然返回 `severity: "none"` 与
+  `recommendation.risk: "none"`。provider 边界现允许这两个值并统一映射为内部
+  契约的 `low`；共享 schema、持久化格式和页面状态枚举保持不变。
+- 最终真实链路验收完成：通过公开 `ops.create` 创建的受控手工事件成功经历
+  Node API → DynamoDB → SQS → Investigator Lambda → GitHub Models → DynamoDB，
+  随后由公开 `ops.get` 读到 `status: completed`。结论使用
+  `openai/gpt-4.1`，`severity: low`、`rootCause: null`、`confidence: 1`，
+  evidence 同时包含 CloudWatch 告警、CloudFormation 部署事件和脱敏日志，
+  recommendation 保持 `approvalRequired: true`，最终 `failure: null`。
+- `/ops` 页面后续统一命名为 `AI Ops Agent`，并从普通表单/结果面板改成
+  “示例问题 → 调查对象与现象 → Agent 进度 → 结论、证据和建议”的工作台。
+  调查记录使用固定高度和内部滚动，空状态与工作台等高，加载骨架不会再改变外层
+  卡片高度。
+- 本地只启动 Web 时，通过 `LOCAL_API_PROXY_TARGET` 让 Vite `/api` 代理到已部署
+  的 Node API；浏览器不直接跨域，也不会继承本机 root AWS 凭证。真实事件仍由
+  线上 Node Lambda 的项目限定角色读写。早期测试记录缺少 nullable `failure`
+  字段时，API 在 DynamoDB 读取边界仅把该已知旧形态归一化为 `null`，其他非法值
+  继续由共享 schema 拒绝，避免一条旧记录拖垮整个 `ops.list`。
+
 ### 知识库编排
 
 Fumadocs 知识库按需求开发顺序展示专题：
