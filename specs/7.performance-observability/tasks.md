@@ -49,8 +49,12 @@
 
 ## 云端验收（部署后）
 
-- [ ] T-701：部署 performance stack 并推送不可变 processor image。
-- [ ] T-702：把 queue 输出接入 server stack 并审查 Change Set。
-- [ ] T-703：设置 web production SDK endpoint、release 和采样率。
-- [ ] T-704：验证五项指标完整经过 API、SQS、ECS、CloudWatch 和 PostgreSQL。
-- [ ] T-705：执行敏感字段、重复 event ID、processor 停止和 DLQ 演练。
+- [x] T-701：部署 performance stack 并推送不可变 processor image。
+- [x] T-702：把 queue 输出接入 server stack 并审查 Change Set。
+- [x] T-703：设置 web production SDK endpoint、release 和采样率。
+- [x] T-704：验证五项指标完整经过 API、SQS、ECS、CloudWatch 和 PostgreSQL。
+- [ ] T-705：执行真实暂时性故障和 DLQ redrive 演练；为避免影响共享 RDS，本次
+  低风险验收不主动制造数据库故障。
+- [x] T-706：验证新增迁移只创建 performance 表/索引，并完成 Token 管理与
+  AI Ops 原功能只读冒烟。
+- [x] T-707：验收后恢复 ECS `DesiredCount=0`，确认主队列和 DLQ 均无积压。
