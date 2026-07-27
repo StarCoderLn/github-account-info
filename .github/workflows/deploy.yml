@@ -11,6 +11,7 @@ on:
       - "packages/db/**"
       - "packages/env/**"
       - "packages/events/**"
+      - "packages/performance-schema/**"
   workflow_dispatch:
 
 permissions:

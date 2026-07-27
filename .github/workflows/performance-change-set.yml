@@ -1,0 +1,242 @@
+name: Performance Change Set
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Create/execute a reviewed Change Set or push the processor image
+        required: true
+        type: choice
+        default: create-policy-change-set
+        options:
+          - create-policy-change-set
+          - execute-policy-change-set
+          - create-runtime-change-set
+          - execute-runtime-change-set
+          - push-image
+      change_set_name:
+        description: Required only when executing a reviewed Change Set
+        required: false
+        type: string
+      desired_count:
+        description: Runtime task count; keep 0 except during a short validation window
+        required: true
+        default: "0"
+        type: choice
+        options:
+          - "0"
+          - "1"
+      image_tag:
+        description: Optional immutable prod-<git-sha>; defaults to the selected master commit
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  change-set:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::879980498268:role/github-actions-deployer
+          aws-region: us-east-2
+
+      - name: Verify non-root deployment identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity_arn="$(aws sts get-caller-identity --query Arn --output text)"
+          if [[ "$identity_arn" != *":assumed-role/github-actions-deployer/"* ]]; then
+            echo "Unexpected deployment identity: $identity_arn" >&2
+            exit 1
+          fi
+
+      - name: Resolve immutable image tag
+        id: image
+        shell: bash
+        env:
+          REQUESTED_IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          image_tag="${REQUESTED_IMAGE_TAG:-prod-${GITHUB_SHA}}"
+          if [[ ! "$image_tag" =~ ^prod-[0-9a-f]{7,40}$ ]]; then
+            echo "image_tag must match prod-<7-to-40-lowercase-hex>" >&2
+            exit 1
+          fi
+          echo "tag=$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create deployer policy Change Set
+        if: inputs.operation == 'create-policy-change-set'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stack_name="github-account-info-performance-deployer-policy"
+          change_set_name="performance-policy-${GITHUB_RUN_ID}"
+          if aws cloudformation describe-stacks --stack-name "$stack_name" >/dev/null 2>&1; then
+            change_set_type="UPDATE"
+          else
+            change_set_type="CREATE"
+          fi
+          aws cloudformation create-change-set \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name" \
+            --change-set-type "$change_set_type" \
+            --template-body file://infra/performance-deployer-policy.yaml \
+            --capabilities CAPABILITY_NAMED_IAM
+          aws cloudformation wait change-set-create-complete \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name"
+          aws cloudformation describe-change-set \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name" \
+            --query '{Status:Status,ExecutionStatus:ExecutionStatus,Changes:Changes[].ResourceChange.{Action:Action,LogicalId:LogicalResourceId,Type:ResourceType,Replacement:Replacement}}'
+          echo "### Review before execution" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Stack: \`$stack_name\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Change Set: \`$change_set_name\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Execute reviewed deployer policy Change Set
+        if: inputs.operation == 'execute-policy-change-set'
+        shell: bash
+        env:
+          CHANGE_SET_NAME: ${{ inputs.change_set_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CHANGE_SET_NAME" ]]; then
+            echo "change_set_name is required" >&2
+            exit 1
+          fi
+          stack_name="github-account-info-performance-deployer-policy"
+          stack_status="$(aws cloudformation describe-stacks \
+            --stack-name "$stack_name" \
+            --query "Stacks[0].StackStatus" \
+            --output text)"
+          aws cloudformation execute-change-set \
+            --stack-name "$stack_name" \
+            --change-set-name "$CHANGE_SET_NAME"
+          if [[ "$stack_status" == "REVIEW_IN_PROGRESS" ]]; then
+            aws cloudformation wait stack-create-complete --stack-name "$stack_name"
+          else
+            aws cloudformation wait stack-update-complete --stack-name "$stack_name"
+          fi
+
+      - name: Create runtime Change Set
+        if: inputs.operation == 'create-runtime-change-set'
+        shell: bash
+        env:
+          DESIRED_COUNT: ${{ inputs.desired_count }}
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+        run: |
+          set -euo pipefail
+          stack_name="github-account-info-performance"
+          change_set_name="performance-runtime-${GITHUB_RUN_ID}"
+          if aws cloudformation describe-stacks --stack-name "$stack_name" >/dev/null 2>&1; then
+            change_set_type="UPDATE"
+          else
+            change_set_type="CREATE"
+            if [[ "$DESIRED_COUNT" != "0" ]]; then
+              echo "The first CREATE must use desired_count=0" >&2
+              exit 1
+            fi
+          fi
+          aws cloudformation create-change-set \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name" \
+            --change-set-type "$change_set_type" \
+            --template-body file://infra/performance.yaml \
+            --parameters \
+              ParameterKey=ImageTag,ParameterValue="$IMAGE_TAG" \
+              ParameterKey=DesiredCount,ParameterValue="$DESIRED_COUNT" \
+            --capabilities CAPABILITY_NAMED_IAM
+          aws cloudformation wait change-set-create-complete \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name"
+          aws cloudformation describe-change-set \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name" \
+            --query '{Status:Status,ExecutionStatus:ExecutionStatus,Parameters:Parameters,Changes:Changes[].ResourceChange.{Action:Action,LogicalId:LogicalResourceId,Type:ResourceType,Replacement:Replacement}}'
+          echo "### Review before execution" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Stack: \`$stack_name\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Change Set: \`$change_set_name\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: \`$IMAGE_TAG\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- DesiredCount: \`$DESIRED_COUNT\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Execute reviewed runtime Change Set
+        if: inputs.operation == 'execute-runtime-change-set'
+        shell: bash
+        env:
+          CHANGE_SET_NAME: ${{ inputs.change_set_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CHANGE_SET_NAME" ]]; then
+            echo "change_set_name is required" >&2
+            exit 1
+          fi
+          stack_name="github-account-info-performance"
+          stack_status="$(aws cloudformation describe-stacks \
+            --stack-name "$stack_name" \
+            --query "Stacks[0].StackStatus" \
+            --output text)"
+          aws cloudformation execute-change-set \
+            --stack-name "$stack_name" \
+            --change-set-name "$CHANGE_SET_NAME"
+          if [[ "$stack_status" == "REVIEW_IN_PROGRESS" ]]; then
+            aws cloudformation wait stack-create-complete --stack-name "$stack_name"
+          else
+            aws cloudformation wait stack-update-complete --stack-name "$stack_name"
+          fi
+
+      - uses: pnpm/action-setup@v6
+        if: inputs.operation == 'push-image'
+        with:
+          version: 10.24.0
+
+      - uses: actions/setup-node@v7
+        if: inputs.operation == 'push-image'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Test and build processor
+        if: inputs.operation == 'push-image'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm --filter performance-processor check-types
+          pnpm --filter performance-processor test
+          pnpm --filter performance-processor build
+
+      - name: Push immutable processor image
+        if: inputs.operation == 'push-image'
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+        run: |
+          set -euo pipefail
+          repository_uri="$(aws cloudformation describe-stacks \
+            --stack-name github-account-info-performance \
+            --query "Stacks[0].Outputs[?OutputKey=='PerformanceRepositoryUri'].OutputValue | [0]" \
+            --output text)"
+          if [[ -z "$repository_uri" || "$repository_uri" == "None" ]]; then
+            echo "Performance repository output is unavailable" >&2
+            exit 1
+          fi
+          registry="${repository_uri%%/*}"
+          aws ecr get-login-password |
+            docker login --username AWS --password-stdin "$registry"
+          docker build \
+            --file apps/performance-processor/Dockerfile \
+            --tag "${repository_uri}:${IMAGE_TAG}" \
+            .
+          docker push "${repository_uri}:${IMAGE_TAG}"
+          aws ecr describe-images \
+            --repository-name github-account-info-performance \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].{Digest:imageDigest,PushedAt:imagePushedAt,Size:imageSizeInBytes}'
+          echo "Pushed \`${repository_uri}:${IMAGE_TAG}\`" >> "$GITHUB_STEP_SUMMARY"

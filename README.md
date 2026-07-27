@@ -14,6 +14,8 @@
 - **异步发布验证**：个人介绍生成后经 SNS、SQS 触发 Lambda 回读公开 API，持续失败的发布验证进入 DLQ
 - **稳定性验证**：CloudWatch Synthetics 巡检公开入口；Node Lambda 与 Go 公网 API 均支持 10% 灰度发布
 - **AI Ops 调查**：CloudWatch 告警或 `/ops` 手工触发 Mastra Agent，使用 GitHub Models 和项目限定的 AWS 只读工具生成可审计结论
+- **真实用户性能监控**：浏览器 SDK 采集 LCP、INP、CLS、FCP、TTFB，经
+  SQS 与独立 ECS 服务清洗后在 `/performance` 展示真实分位数
 - **端到端类型安全**：tRPC + Drizzle + zod 全链路类型推导，无需手写接口类型
 
 ## 技术栈
@@ -35,11 +37,14 @@ github-account-info/
 │   ├── server/      # Node Hono + tRPC 服务端入口
 │   ├── go-api/      # 个人介绍生成与公开读取 REST API
 │   ├── ai-ops-agent/ # Mastra 调查 Agent 与告警/SQS Lambda handlers
+│   ├── performance-processor/ # SQS 性能事件清洗与 PostgreSQL 持久化
 │   └── profile-event-consumer/ # SQS 个人介绍事件消费者
 ├── packages/
 │   ├── api/         # tRPC procedure 定义（端到端类型源）
 │   ├── events/      # SNS/SQS 共享事件契约
 │   ├── ai-ops-schema/ # Incident、证据与建议动作共享契约
+│   ├── performance-schema/ # 性能事件、批次与统计筛选共享契约
+│   ├── performance-sdk/ # 浏览器 RUM 采集、缓冲、脱敏与传输
 │   ├── db/          # Drizzle schema 与 migration
 │   ├── preview-environment/ # Cloudflare 与 CodeBuild 共享的 PR preview key
 │   ├── ui/          # 共享 shadcn/ui 组件
@@ -75,6 +80,7 @@ GO_API_INTERNAL_URL=http://localhost:8080
 MANAGEMENT_API_ENABLED=true
 AI_OPS_INCIDENT_TABLE= # 未部署 AI Ops 时留空
 AI_OPS_QUEUE_URL=      # 未部署 AI Ops 时留空
+PERFORMANCE_QUEUE_URL= # 未部署 Feature 7 时留空
 ```
 
 前端环境变量：
@@ -82,6 +88,9 @@ AI_OPS_QUEUE_URL=      # 未部署 AI Ops 时留空
 ```env
 VITE_SERVER_URL=http://localhost:3000
 VITE_GO_API_URL=http://localhost:8080
+VITE_PERFORMANCE_ENABLED=false
+VITE_APP_ENVIRONMENT=development
+VITE_APP_RELEASE=local
 ```
 
 ### 3. 初始化数据库
@@ -128,6 +137,7 @@ pnpm dev:go      # Go API http://localhost:8080
 4. 查看/编辑账号信息，点击「保存」持久化修改
 5. 点击卡片上的「生成个人介绍」，由 Node 调用 Go 内部接口生成并展示结果
 6. 通过 `/u/<GitHub username>` 查看无需登录的公开个人主页
+7. 部署性能链路后通过 `/performance` 查看五项 Web Vitals、错误率和 route 对比
 
 ## 常用命令
 

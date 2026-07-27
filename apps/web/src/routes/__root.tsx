@@ -56,10 +56,17 @@ function RootComponent() {
 							>
 								AI Ops Agent
 							</Link>
+							<Link
+								to="/performance"
+								className="rounded-lg px-3 py-1.5 text-gray-500 transition hover:bg-blue-50 hover:text-blue-600"
+								activeProps={{ className: "bg-blue-50 text-blue-600" }}
+							>
+								性能监控
+							</Link>
 						</nav>
 					</div>
 				</header>
-				<main className="mx-auto max-w-3xl px-6 py-8">
+				<main className="mx-auto max-w-6xl px-6 py-8">
 					<Outlet />
 				</main>
 			</div>

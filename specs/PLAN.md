@@ -38,6 +38,17 @@ AWS 账号不能使用 Amazon Bedrock，模型推理采用 Mastra + GitHub Model
 免费原型额度；Agent 运行、事件触发、状态存储、IAM 与审计仍部署在 AWS。
 详细需求、设计和执行任务见 `specs/6.ai-ops-agent/`。
 
+## 性能可观测性扩展（2026-07-27）
+
+| 序号 | feature | 说明 | 依赖 | 状态 |
+| --- | --- | --- | --- | --- |
+| 7 | performance-observability | 浏览器性能 SDK、SQS/ECS 日志清洗、PostgreSQL 分位数统计与五项 Web Vitals 页面 | 4, 5 | ✅ 代码侧 MVP 与部署准备完成；云端待验收 |
+
+Feature 7 的公开采集路径固定为 `/api/v1/performance/events`。浏览器不持有 AWS
+凭证；Node Lambda 只校验并写 SQS，独立 ECS processor 负责清洗、CloudWatch
+日志和幂等入库。`/performance` 同时展示 LCP、INP、CLS、FCP、TTFB。
+详细需求、设计和执行任务见 `specs/7.performance-observability/`。
+
 **执行顺序**：1、2 并行完成 → 3 依赖 1/2 接口，已完成。
 
 ## 关键决策

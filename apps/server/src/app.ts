@@ -6,6 +6,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 
+import { createPerformanceRoutes } from "./routes/performance";
+
 export const app = new Hono();
 
 app.use(logger());
@@ -29,6 +31,8 @@ app.use(
 		},
 	}),
 );
+
+app.route("/api/v1/performance", createPerformanceRoutes());
 
 app.get("/", (c) => {
 	return c.text("OK");

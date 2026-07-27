@@ -21,6 +21,7 @@
 		"@github-account-info/db": "workspace:*",
 		"@github-account-info/env": "workspace:*",
 		"@github-account-info/events": "workspace:*",
+		"@github-account-info/performance-schema": "workspace:*",
 		"@trpc/client": "catalog:",
 		"@trpc/server": "catalog:",
 		"dotenv": "catalog:",

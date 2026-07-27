@@ -1,0 +1,20 @@
+{
+	"name": "@github-account-info/performance-sdk",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"check-types": "tsc --noEmit",
+		"test": "tsx --test src/**/*.test.ts"
+	},
+	"dependencies": {
+		"@github-account-info/performance-schema": "workspace:*",
+		"web-vitals": "^5.1.0"
+	},
+	"devDependencies": {
+		"@github-account-info/config": "workspace:*",
+		"tsx": "^4.19.2",
+		"typescript": "catalog:"
+	}
+}

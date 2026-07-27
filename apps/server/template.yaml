@@ -85,6 +85,15 @@ Parameters:
     Type: String
     Default: ""
     AllowedPattern: "^$|^arn:(aws|aws-us-gov|aws-cn):sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$"
+  PerformanceQueueUrl:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^https://sqs\\.[a-z0-9-]+\\.amazonaws\\.com/[0-9]{12}/[A-Za-z0-9_-]+$"
+    Description: Optional performance event queue created by infra/performance.yaml.
+  PerformanceQueueArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:(aws|aws-us-gov|aws-cn):sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$"
   LambdaSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
     Default: subnet-0271ef8002e00346a
@@ -118,6 +127,10 @@ Conditions:
       - !Not [!Equals [!Ref AiOpsIncidentTableArn, ""]]
       - !Not [!Equals [!Ref AiOpsQueueUrl, ""]]
       - !Not [!Equals [!Ref AiOpsQueueArn, ""]]
+  HasPerformanceQueue:
+    !And
+      - !Not [!Equals [!Ref PerformanceQueueUrl, ""]]
+      - !Not [!Equals [!Ref PerformanceQueueArn, ""]]
 
 Resources:
   # Node/tRPC Lambda。AWS::Serverless::Function 是 SAM 简写，SAM 会为它
@@ -139,6 +152,7 @@ Resources:
           PROFILE_EVENTS_TOPIC_ARN: !Ref ProfileEventsTopicArn
           AI_OPS_INCIDENT_TABLE: !Ref AiOpsIncidentTableName
           AI_OPS_QUEUE_URL: !Ref AiOpsQueueUrl
+          PERFORMANCE_QUEUE_URL: !Ref PerformanceQueueUrl
           # Preserve the existing unauthenticated production management flow.
           # This is an explicit compatibility choice; CORS is not authentication.
           MANAGEMENT_API_ENABLED: "true"
@@ -186,6 +200,21 @@ Resources:
             Action: sqs:SendMessage
             Resource: !Ref AiOpsQueueArn
 
+  ApiPerformanceQueuePolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasPerformanceQueue
+    Properties:
+      PolicyName: publish-performance-events
+      Roles:
+        - !Ref ApiFunctionRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SendOnlyConfiguredPerformanceQueue
+            Effect: Allow
+            Action: sqs:SendMessage
+            Resource: !Ref PerformanceQueueArn
+
   # 保留旧版隐式 SAM HttpApi 生成的逻辑 ID，使 CloudFormation 能原地更新
   # 已有 API，而不是悄悄创建第二个公网入口。部署前仍要在 Change Set 中
   # 确认该资源不会发生 Replacement。
@@ -205,6 +234,21 @@ Resources:
           - name: httpapi:createdBy
             x-amazon-apigateway-tag-value: SAM
         paths:
+          "/api/v1/performance/events":
+            post:
+              responses: {}
+              x-amazon-apigateway-integration: &performance-lambda-integration
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub
+                  - >-
+                    arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiAliasArn}/invocations
+                  - ApiAliasArn: !Sub ${ApiFunction.Arn}:live
+                payloadFormatVersion: "2.0"
+                timeoutInMillis: 30000
+            options:
+              responses: {}
+              x-amazon-apigateway-integration: *performance-lambda-integration
           "/":
             # 根路径和 /trpc/* 都采用 Lambda AWS_PROXY 集成。
             get:

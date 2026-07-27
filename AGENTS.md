@@ -64,3 +64,39 @@ Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
 - [F6-L16] DynamoDB 文档必须持续满足共享 `incidentSchema`，不能为“清空失败”使用 `REMOVE failure`，因为非失败状态的契约也是 `failure: null` 而不是字段缺失。`begin` 和 `complete` 必须显式写 `failure = :null`，否则 investigating/completed 记录会让 `/ops` 的 list/get 在解析时返回 500。
 - [F6-L17] 健康调查时模型可能返回语义合理但不属于内部枚举的 `severity: "none"` / `risk: "none"`。不要为 provider 习惯扩散修改共享 schema 和页面状态；在模型 conclusion 边界接受 `none` 并归一化为内部最低等级 `low`，再执行最终 `investigationSchema` 校验和持久化。
 - [F6-L18] 收紧持久化 schema 后必须兼容已经写入的旧文档：早期 incident 缺少后来新增的 nullable `failure` 字段时，严格解析会让一条旧记录拖垮整个 `ops.list`。应在 DynamoDB 读取边界仅对已知旧形态把缺失字段归一化为 `null`，同时继续拒绝非空的非法值；不要放宽共享 schema，也不要为了修复读取问题用 root 批量改历史数据。
+
+## Feature 7：性能 SDK 与可视化统计
+
+- [F7-L01] 浏览器 SDK 只能对共享 Zod schema 做 `import type`：若为读取
+  `schemaVersion`、batch size 等常量而运行时 import schema package，Vite 会把
+  Zod 一并打入性能采集 chunk，监控代码反而增加被监控页面负担。协议常量在 SDK
+  内保持字面量并由契约测试校准，运行时校验保留在服务端和 processor。
+- [F7-L02] CloudWatch Logs subscription 不能直接把日志推给 ECS；其原生目标是
+  Lambda、Kinesis、Firehose、OpenSearch 等。浏览器性能链路若明确要求 ECS 清洗，
+  应使用凭证隔离的 HTTP 入口 → SQS → 独立 ECS consumer，而不是让浏览器持有
+  AWS 凭证或轮询 CloudWatch。
+- [F7-L03] ECR repository 和 ECS Service 位于同一个首次创建的 Stack 时，镜像在
+  repository 创建前不可能存在。首次 Change Set 必须 `DesiredCount=0`，执行后
+  推送不可变 `prod-<sha>` 镜像，再用 UPDATE Change Set 把 DesiredCount 调为 1；
+  不要用 mutable `latest` 或反复重启失败 Service 绕过部署顺序。
+- [F7-L04] 百分位数不可组合：多个批次的 p75 不能通过平均得到总体 p75。低量 MVP
+  保留清洗样本并用 PostgreSQL `percentile_cont` 查询真实 p50/p75/p95；规模增长
+  后应存 histogram/可合并 sketch，而不是预聚合裸百分位数。
+- [F7-L05] ECS SQS consumer 必须区分永久拒绝和暂时失败：JSON/schema/时间窗非法
+  的消息记录稳定原因后确认消费，数据库或 AWS 暂时故障则不删除并等待重试/DLQ。
+  若把所有非法输入都抛回队列，一条毒消息会无意义消耗五次处理并污染 DLQ。
+- [F7-L06] 仓库声明 `packageManager: pnpm@10.24.0` 且使用 pnpm catalog；执行安装
+  必须通过 `corepack pnpm`。系统全局 pnpm 7 无法解析 catalog/当前 lockfile，
+  还会尝试重建 node_modules，不能用全局版本更新依赖。
+- [F7-L07] Node API 已有 `GET /api/v1/{proxy+}` 指向 Go VPC Link；新增性能入口
+  必须声明精确的 `POST /api/v1/performance/events` 和 OPTIONS Lambda integration，
+  同时更新 route boundary 静态测试。不能把 POST 加到 Go wildcard，否则会把
+  浏览器采集流量错误转入 Go API。
+- [F7-L08] production ECS 直连真实 RDS hostname 时必须加载 RDS CA 并启用证书
+  校验；只有本地 SSM `127.0.0.1` migration 才使用 `uselibpqcompat=true` 兼容
+  hostname 不匹配。processor 镜像复用受版本控制的区域 CA bundle，不使用
+  `rejectUnauthorized: false`。
+- [F7-L09] 低流量作业型 ECS consumer 不应默认常驻：Performance stack 首次创建
+  和日常闲置都保持 `DesiredCount=0`，仅在验收窗口通过 OIDC + 人工审查 Change
+  Set 切到 1，结束后再以 Change Set 恢复 0；禁止直接更新 ECS Service 造成
+  CloudFormation drift，也禁止使用本机 root 凭证部署。
