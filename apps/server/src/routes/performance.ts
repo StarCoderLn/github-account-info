@@ -11,6 +11,12 @@ import { bodyLimit } from "hono/body-limit";
 
 const MAX_BODY_SIZE = 64 * 1024;
 
+/**
+ * 浏览器性能事件的公开接入路由。
+ *
+ * 该入口只做体积限制、协议校验和入队，不在 HTTP 请求中同步访问数据库。
+ * queue 参数可注入，既便于路由测试，也让“未配置采集链路”具有明确的 503 语义。
+ */
 export function createPerformanceRoutes(
 	queue: PerformanceQueue | null = env.PERFORMANCE_QUEUE_URL
 		? createSqsPerformanceQueue(env.PERFORMANCE_QUEUE_URL)
@@ -20,6 +26,7 @@ export function createPerformanceRoutes(
 
 	routes.post(
 		"/events",
+		// 在 JSON 解析前拒绝超大请求，避免匿名入口占用不受控的内存。
 		bodyLimit({
 			maxSize: MAX_BODY_SIZE,
 			onError: (context) =>
@@ -51,6 +58,7 @@ export function createPerformanceRoutes(
 
 			try {
 				const result = await ingestPerformanceBatch(body, queue);
+				// 202 只表示批次已被 SQS 接受；清洗和持久化仍由异步 processor 完成。
 				return context.json(result, 202);
 			} catch (error) {
 				if (error instanceof InvalidPerformanceBatchError) {
@@ -75,6 +83,7 @@ export function createPerformanceRoutes(
 						503,
 					);
 				}
+				// 日志只记录错误类型，禁止输出可能含 URL、错误消息或凭证的原始 body。
 				console.error(
 					JSON.stringify({
 						level: "error",

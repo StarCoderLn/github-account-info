@@ -92,13 +92,33 @@ Internal ALB 没有公网地址。API Gateway 是公开入口，VPC Link 负责�
 
 Node production 由 Lambda `live` alias 原生权重执行 10% 流量、观察 5 分钟、再切到 100%；Go production 的公网 ALB 链路由独立 Canary Service 与 Target Group 权重执行相同策略。只有稳定 Go Service 注册 Cloud Map，因此 Node → Go 内部调用不参与公网灰度。
 
-## 从哪里开始
+## 五大模块怎么读
 
-- 想直观看完整系统或对比历史版本：打开 [架构图总览](/docs/deployment/architecture-gallery)，现有架构图都集中在那里。
-- 想部署巡检、消息队列和灰度能力：读 [稳定性与异步事件链路](/docs/deployment/operations-reliability)。
-- 想理解 Web Vitals 如何入队、清洗和统计：读 [性能 SDK、异步清洗与可视化统计](/docs/deployment/performance-observability)。
-- 想理解告警如何形成只读调查：读 [AI Ops Agent 调查闭环](/docs/deployment/ai-ops-agent)。
-- 第一次了解项目：先读本页，再读 [Go 服务：目标与路线](/docs/deployment/go-service)。
-- 重建 Node 部署：读 [Node Lambda 部署实录](/docs/deployment/node-lambda)。
+五组笔记都遵循同一条阅读主线：
+
+```text
+先看目标和结论 → 理解架构与职责 → 按真实顺序看实现
+→ 理解 AWS 部署 → 核对验收状态 → 用排障和代码导读复习
+```
+
+内容较短的模块在一个页面中完成这条主线；Go 服务涉及容器、数据库、网络、CI/CD
+和 PR Preview，因此按同样顺序拆成十章。拆页只控制单页长度，不改变阅读逻辑。
+
+| 模块 | 白话目标 | 推荐入口 |
+| --- | --- | --- |
+| Node Lambda 部署 | 把本地 Node/Hono API 安全地放到 Lambda，并连接私有 RDS | [Node Lambda 部署实录](/docs/deployment/node-lambda) |
+| Go 服务部署 | 在不重写 Node 的前提下，引入一条完整 ECS/Fargate 容器链路 | [Go 服务部署与容器平台](/docs/deployment/go-service) |
+| 稳定性与异步事件 | 主动巡检、异步验证，并让 Node 和 Go 支持受控灰度 | [稳定性巡检、事件队列与灰度发布](/docs/deployment/operations-reliability) |
+| AI Ops Agent | 自动收集只读证据，生成可追溯、需人工审批的调查报告 | [AI Ops Agent 调查闭环](/docs/deployment/ai-ops-agent) |
+| 性能监控与可视化 | 从真实浏览器采集性能，经异步清洗后展示统计结果 | [性能 SDK、异步清洗与可视化统计](/docs/deployment/performance-observability) |
+
+每篇首次出现的缩写都会先给中文解释；真实故障统一按“现象 → 原因 → 修复 → 教训”
+记录。状态统一区分代码完成、部署准备、云端部署和真实链路验收，避免把
+“本地测试通过”误写成“生产已经上线”。
+
+## 其他入口
+
+- 想直观看完整系统或对比历史版本：打开
+  [架构图总览](/docs/deployment/architecture-gallery)。
 - 操作 Go production：按 Go 教程左侧顺序阅读，不要直接跳到 CodeBuild。
-- 线上故障：先看 Go 教程的排障章节，再按 `infra/RUNBOOK.md` 执行当前命令。
+- 线上故障：先看对应模块的排障章节，再按 `infra/RUNBOOK.md` 执行当前命令。

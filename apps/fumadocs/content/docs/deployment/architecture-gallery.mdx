@@ -4,6 +4,9 @@ description: 按需求开发顺序查看 Node、Go、可靠性、AI Ops 与性�
 icon: Images
 ---
 
+import nodeLambdaArchitectureSvg from "./node-lambda/assets/architecture.svg";
+import goProfilePlatformSvg from "./go-service/assets/go-profile-platform.svg";
+
 这里按需求开发顺序收录项目部署文档中的架构图：先建立 Node/Lambda 基础，
 再加入 Go 平台、PR Preview、稳定性能力和 AI Ops Agent，最后补充浏览器性能 SDK、
 异步清洗与可视化统计链路。
@@ -23,7 +26,7 @@ icon: Images
 
 ![历史 Node Lambda 整体部署架构](./node-lambda/assets/architecture.png)
 
-[查看可缩放的 SVG 原图](./node-lambda/assets/architecture.svg)
+<a href={nodeLambdaArchitectureSvg.src}>查看可缩放的 SVG 原图</a>
 
 ### Node/Lambda AWS 资源与部署链路
 
@@ -40,7 +43,7 @@ icon: Images
 
 ![Go 个人主页平台部署架构](./go-service/assets/go-profile-platform.png)
 
-[查看可缩放的 SVG 原图](./go-service/assets/go-profile-platform.svg)
+<a href={goProfilePlatformSvg.src}>查看可缩放的 SVG 原图</a>
 
 ## 核心部署与 PR Preview
 

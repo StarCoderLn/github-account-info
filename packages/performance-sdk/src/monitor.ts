@@ -10,19 +10,35 @@ import {
 	sanitizeRoute,
 } from "./sanitize";
 
+/**
+ * 轻量浏览器 Performance SDK（RUM，真实用户监控）。
+ *
+ * 设计原则：
+ * 1. 所有采集失败都静默降级，不能影响宿主应用。
+ * 2. 队列、批量和重试都有明确上限，避免弱网下无限占用内存。
+ * 3. 事件创建时立即固化并清洗 route，防止 SPA 跳转后归属到错误页面。
+ * 4. schema 常量保留为字面量，避免运行时引入共享 Zod 包。
+ */
 const DEFAULT_FLUSH_INTERVAL_MS = 5_000;
 const PERFORMANCE_SCHEMA_VERSION = 1 as const;
 const PERFORMANCE_SDK_BATCH_SIZE = 20;
 const PERFORMANCE_SDK_QUEUE_LIMIT = 100;
 
 export type PerformanceMonitorConfig = {
+	/** Node 接收入口，不允许 SDK 直接持有任何 AWS 凭证。 */
 	endpoint: string;
+	/** 稳定应用标识，用于共享表中的租户边界。 */
 	appId: string;
+	/** deployment 环境与不可变 release 标签，用于页面筛选和版本对比。 */
 	environment: string;
 	release: string;
+	/** 0~1 的会话级采样率；同一 monitor 实例内不会逐事件重新抽样。 */
 	sampleRate?: number;
+	/** 周期 flush 下限为 1 秒，防止错误配置制造请求风暴。 */
 	flushIntervalMs?: number;
+	/** 单次发送数量受 SDK 常量限制，不接受任意放大。 */
 	batchSize?: number;
+	/** SPA 集成会自行记录首访，因此可关闭 SDK 内置首访，避免重复计数。 */
 	trackInitialPageView?: boolean;
 };
 
@@ -67,6 +83,7 @@ export function createPerformanceMonitor(
 		(typeof window === "undefined"
 			? null
 			: { window, document, performance, fetch });
+	// 会话级抽样保证同一用户会话的 page-view、错误和 Web Vitals 可以关联。
 	const sampled = browser
 		? Math.random() < validSampleRate(config.sampleRate)
 		: false;
@@ -85,6 +102,10 @@ export function createPerformanceMonitor(
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let resourceObserver: PerformanceObserver | undefined;
 
+	/**
+	 * 为每条事件补齐公共维度。route 在这里而不是 flush 时计算，
+	 * 否则队列中的旧事件会被后续 SPA 地址覆盖。
+	 */
 	const common = (route?: string) => ({
 		schemaVersion: PERFORMANCE_SCHEMA_VERSION,
 		eventId: createEventId(),
@@ -101,6 +122,7 @@ export function createPerformanceMonitor(
 			return;
 		}
 		queue.push(event);
+		// 队列满时保留最新事件；监控数据允许有界丢弃，业务页面不可 OOM。
 		if (queue.length > PERFORMANCE_SDK_QUEUE_LIMIT) {
 			queue = queue.slice(-PERFORMANCE_SDK_QUEUE_LIMIT);
 		}
@@ -124,6 +146,7 @@ export function createPerformanceMonitor(
 			return false;
 		}
 		const body = JSON.stringify(batch);
+		// 页面进入后台/关闭时优先 beacon；普通前台请求使用 keepalive fetch。
 		if (
 			browser.document.visibilityState === "hidden" &&
 			typeof browser.window.navigator.sendBeacon === "function"
@@ -139,6 +162,7 @@ export function createPerformanceMonitor(
 				headers: { "Content-Type": "application/json" },
 				body,
 				keepalive: true,
+				// RUM 入口是匿名、限 schema 的写入口，不携带 Cookie 或登录凭证。
 				credentials: "omit",
 			});
 			return response.ok;
@@ -151,6 +175,7 @@ export function createPerformanceMonitor(
 		if (queue.length === 0) {
 			return;
 		}
+		// 先从主队列取出，避免发送期间新到事件与本批相互覆盖。
 		const pending = queue.splice(0, batchSize);
 		const sent = await send({
 			schemaVersion: PERFORMANCE_SCHEMA_VERSION,
@@ -160,6 +185,7 @@ export function createPerformanceMonitor(
 			retriedBatch = false;
 			return;
 		}
+		// 失败批次最多回队一次；持续失败时不无限重试或阻塞后续页面交互。
 		if (!retriedBatch) {
 			retriedBatch = true;
 			queue = [...pending, ...queue].slice(0, PERFORMANCE_SDK_QUEUE_LIMIT);
@@ -170,6 +196,8 @@ export function createPerformanceMonitor(
 		if (!browser) {
 			return;
 		}
+		// SPA 跳转没有新的 NavigationTiming；此时沿用本次文档导航耗时作为
+		// page-view 的体验参考，访问次数的准确性由显式 route 保证。
 		const navigation = browser.performance.getEntriesByType("navigation")[0] as
 			| PerformanceNavigationTiming
 			| undefined;
@@ -208,6 +236,7 @@ export function createPerformanceMonitor(
 	};
 
 	const visibilityListener = () => {
+		// 页面隐藏时尽快排空，降低定时器被浏览器节流造成的数据损失。
 		if (browser?.document.visibilityState === "hidden") {
 			void flush();
 		}
@@ -223,6 +252,7 @@ export function createPerformanceMonitor(
 				if (
 					(entry.initiatorType !== "fetch" &&
 						entry.initiatorType !== "xmlhttprequest") ||
+					// 排除 SDK 自己的上传请求，否则会形成“监控监控请求”的递归噪声。
 					entry.name.startsWith(config.endpoint)
 				) {
 					continue;
@@ -253,6 +283,7 @@ export function createPerformanceMonitor(
 		browser.document.addEventListener("visibilitychange", visibilityListener);
 		timer = setInterval(() => void flush(), flushIntervalMs);
 		startResourceObserver();
+		// web-vitals 是相对较重的依赖，按需动态加载以缩小应用首屏主 chunk。
 		void import("web-vitals")
 			.then(({ onCLS, onFCP, onINP, onLCP, onTTFB }) => {
 				onCLS((metric) => reportMetric("CLS", metric.value));
@@ -281,10 +312,12 @@ export function createPerformanceMonitor(
 			"visibilitychange",
 			visibilityListener,
 		);
+		// stop 不阻塞卸载流程；最后一批仍通过 keepalive/beacon 尽力发送。
 		void flush();
 	};
 
 	const track = (event: CustomPerformanceEvent) => {
+		// 自定义事件仍受统一的名称长度和非负数约束。
 		enqueue({
 			...common(),
 			type: "custom",

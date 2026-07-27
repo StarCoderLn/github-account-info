@@ -38,7 +38,7 @@ Feature 4 的完整 AWS/Cloudflare 实测证据位于
 - [F5-L02] SQS Lambda consumer 必须同时实现 partial batch failure 并在 event source mapping 启用 `ReportBatchItemFailures`。只返回失败 record 的 `itemIdentifier`，否则一条坏消息会让同批成功消息重复消费。
 - [F5-L03] SNS publish 成功不等于事件链路成功：验收必须继续检查 SQS 指标、consumer 日志及业务回读结果。DLQ 演练使用“契约合法但业务不存在”的测试事件，问题修复前禁止 redrive；人工查看主队列也会改变 receive count 和 visibility。
 - [F5-L04] Lambda alias 灰度的前提是 API Gateway integration 和 `AWS::Lambda::Permission` 都指向 `live` alias。若仍调用函数 ARN 或 `$LATEST`，配置 `AdditionalVersionWeights` 也不会影响真实流量；发布结束还要显式清空旧附加权重。
-- [F5-L05] 当前账号无法启用 CodeDeploy（`SubscriptionRequiredException`），Node 灰度因此使用 Lambda 原生 alias 权重。账号能力是部署设计输入，不能先假定某项 AWS 服务必然可用。
+- [F5-L05] CodeDeploy `SubscriptionRequiredException` 不一定是 IAM 或 Region 问题：当前账号用 root 在两个默认启用 Region 调用仍失败，`GetAccountPlanState` 最终确认根因是 2025-07-15 后新版 AWS Free Tier 的 `FREE` account plan 服务范围限制。AWS 不提供 CodeDeploy 单服务开关，必须把整个账号不可逆升级为 `PAID` plan；剩余 credits 可继续抵扣到期前的合格费用，但超额或不适用 credits 的用量会按量收费。未明确接受计费变化前继续使用 Lambda 原生 alias 权重，不能擅自升级账号计划。
 - [F5-L06] 带 Cloud Map Service Registry 的 ECS Service 不能直接套用所需的原生 Canary strategy。当前使用 Stable/Canary 双 Service：只有 Stable 注册 Cloud Map，Canary 只接入公网备用 Target Group，避免内部写链路提前命中新版本。
 - [F5-L07] ALB weighted target groups 只负责按权重分流，不会在某组为空或不健康时自动把流量转移到另一组。发布脚本必须先等待 Canary target healthy，再开放权重；失败时同时恢复旧镜像、100/0 权重和 Canary `DesiredCount=0`。
 

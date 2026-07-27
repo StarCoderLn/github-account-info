@@ -180,7 +180,32 @@ API Gateway 的 Node integrations 和 `AWS::Lambda::Permission` 全部指向 `${
 6. 五分钟全部通过后，把 `live` 100% 指向 candidate 并清空 `AdditionalVersionWeights`。
 7. 任一窗口失败，立即清空权重并把 `live` 恢复到稳定版本。
 
-该账号无法启用 CodeDeploy，因此这里直接使用 Lambda alias 原生权重；灰度行为仍完全由版本和 alias 控制。
+该账号暂时无法使用 CodeDeploy，因此这里直接使用 Lambda alias 原生权重；灰度行为仍完全由版本和 alias 控制。
+
+> **为什么 CodeDeploy 不可用**
+>
+> 2026-07-28 使用账号 root 凭证分别在 `us-east-1` 和 `us-east-2` 调用只读接口
+> `codedeploy:ListApplications`，均返回
+> `SubscriptionRequiredException: The AWS Access Key Id needs a subscription for the service`。
+> 两个 Region 都是 `ENABLED_BY_DEFAULT`，并且 root 不受普通 IAM Allow 缺失影响，
+> 因此这不是部署角色权限、Region opt-in 或 CloudFormation 模板问题。
+>
+> `freetier:GetAccountPlanState` 进一步确认该账号的 `accountPlanType` 为 `FREE`。
+> 这是 2025-07-15 后新版 AWS Free Tier 的 Free account plan：它只允许访问部分
+> AWS 服务和功能。AWS 官方要求升级到不可降级的 `PAID` account plan，才能立即
+> 访问全部 AWS 服务和功能，包括当前被计划限制的 CodeDeploy。升级后剩余 Free
+> Tier credits 会继续自动抵扣符合条件的费用，直到 credits 到期；credits 用尽或
+> 使用不适用 credits 的服务后，将按标准 pay-as-you-go 价格向付款方式收费。
+>
+> 官方说明：[Choosing an AWS Free Tier plan](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html)；
+> [AWS Free Tier FAQs](https://aws.amazon.com/free/free-tier-faqs/)。
+>
+> 若以后决定开启，应先确认预算和付款方式，再在 Billing 控制台选择
+> **Upgrade plan → Upgrade account**，或显式执行
+> `aws freetier upgrade-account-plan --account-plan-type PAID --region us-east-1`。
+> 这是整个账号的计费计划升级，不是单独为 CodeDeploy 打开的服务开关。升级后先用
+> `aws deploy list-applications --region us-east-2` 验证 entitlement，再决定是否
+> 把现有 Lambda alias 灰度迁回 CodeDeploy。
 
 ### 第七步：实现 Go 公网灰度
 
@@ -429,7 +454,11 @@ Node → Go 的内部生成调用仍走 Cloud Map private DNS，并且只有稳�
 - Go 稳定/Canary Service 各运行 1 个 Task，ALB 权重为 90/10，完整观察五分钟后恢复稳定 100%、Canary `DesiredCount=0`。
 - `github-info-api` Synthetics Canary 首次运行结果为 `PASSED`，之后按 15 分钟周期执行。
 
-该账号调用 CodeDeploy 会返回 `SubscriptionRequiredException`，因此 Node 灰度采用 Lambda alias 原生权重。失败的 SAM/CodeDeploy Change Set 已自动回滚，没有替换 Lambda、API Gateway 或业务数据。
+该账号调用 CodeDeploy 会返回 `SubscriptionRequiredException`，后续已定位为新版
+AWS Free Tier 的 `FREE` account plan 服务范围限制，并非 IAM 或 Region 未启用。
+只有将整个账号不可逆地升级为 `PAID` plan 才能解除；截至 2026-07-28 决定暂不升级。
+因此 Node 灰度继续采用 Lambda alias 原生权重。失败的 SAM/CodeDeploy Change Set
+已自动回滚，没有替换 Lambda、API Gateway 或业务数据。
 
 ## Synthetics 结果
 

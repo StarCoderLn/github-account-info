@@ -17,6 +17,12 @@ export type ProcessorDependencies = {
 	log?: (record: Record<string, unknown>) => void;
 };
 
+/**
+ * 处理单条 SQS 消息。
+ *
+ * 返回 rejected 的输入属于永久错误，调用方仍应删除消息；数据库或 AWS 等暂时性
+ * 错误则继续抛出，让消息在 visibility timeout 后重试并最终进入 DLQ。
+ */
 export async function processMessage(
 	body: string | undefined,
 	repository: PerformanceEventRepository,
@@ -28,6 +34,7 @@ export async function processMessage(
 	try {
 		parsed = JSON.parse(body ?? "");
 	} catch {
+		// 不记录原始 body，避免错误报告中泄漏浏览器上下文。
 		log({
 			level: "warn",
 			message: "performance batch rejected",
@@ -45,6 +52,7 @@ export async function processMessage(
 		return "rejected";
 	}
 	try {
+		// 先清洗完整批次再开始事务；任一事件永久非法时整批稳定拒绝。
 		const cleaned = result.data.events.map((event) =>
 			cleanPerformanceEvent(event, now),
 		);
@@ -90,6 +98,7 @@ export async function runProcessor(
 	let nextCleanupAt = 0;
 	while (!signal.aborted) {
 		const currentTime = dependencies.now?.() ?? new Date();
+		// 清理失败不阻断消费；正常每天执行一次，失败后一小时再试。
 		if (currentTime.getTime() >= nextCleanupAt) {
 			try {
 				const cutoff = new Date(
@@ -112,6 +121,7 @@ export async function runProcessor(
 				nextCleanupAt = currentTime.getTime() + 60 * 60 * 1_000;
 			}
 		}
+		// SQS 长轮询降低空队列请求费用；visibility timeout 给清洗和数据库事务留出时间。
 		const response = await dependencies.sqs.send(
 			new ReceiveMessageCommand({
 				QueueUrl: dependencies.config.PERFORMANCE_QUEUE_URL,
@@ -129,6 +139,7 @@ export async function runProcessor(
 					log,
 				);
 				if (message.ReceiptHandle) {
+					// processed 和永久 rejected 都确认消费；只有暂时失败不删除、等待重试。
 					await dependencies.sqs.send(
 						new DeleteMessageCommand({
 							QueueUrl: dependencies.config.PERFORMANCE_QUEUE_URL,
@@ -137,6 +148,7 @@ export async function runProcessor(
 					);
 				}
 			} catch (error) {
+				// 保留 messageId 便于排障，但不输出消息正文。
 				log({
 					level: "error",
 					message: "performance batch processing failed",
