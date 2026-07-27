@@ -4,7 +4,7 @@
 
 ## 最终状态
 
-- PR #22、#23 已合并到 `master`；最终验收提交为
+- PR #22、#23、#24、#25 已合并到 `master`；AWS 运行时验收提交为
   `3f0efe1a177dbfff467c326dedf6b8de6118323f`。
 - `github-account-info-performance-deployer-policy`：
   `UPDATE_COMPLETE`。
@@ -21,10 +21,11 @@
 - Performance 主队列可见、处理中和延迟消息均为 `0`；DLQ 消息为 `0`。
 - Node Lambda `live` alias 已接入 Performance Queue；此前发布 run
   `30252625642` 成功，alias version 为 `7`，无附加 canary weight。
-- Cloudflare Pages production 运行提交 `3f0efe1`。生产变量为
+- Cloudflare Pages production 已运行页面改版合并提交
+  `92cd3db3dd889aed793b84c9d38564533624572a`。生产变量为
   `VITE_PERFORMANCE_ENABLED=true`、`VITE_APP_ENVIRONMENT=production`、
-  `VITE_APP_RELEASE=3f0efe1`，deployment
-  `aefdd1d2-7937-48c2-b836-1f57e8369dee` 构建成功。
+  `VITE_APP_RELEASE=92cd3db`，deployment
+  `b0c24ded-c8a5-43a3-a69b-fd536a6dac46` 构建成功。
 
 闲置状态保持 `DesiredCount=0`，因此没有常驻 Fargate task 费用。Queue、ECR、
 CloudWatch Logs 和 alarms 等按各自用量或保留量计费。
@@ -71,6 +72,12 @@ CloudWatch Logs 和 alarms 等按各自用量或保留量计费。
    和正确的 `access-control-allow-origin`。
 8. 生产 JS 已确认包含启用后的 SDK 配置、当前 release、接收路径和可下载的动态
    SDK chunk。
+9. 页面视觉改版合并后，Cloudflare production 自动部署提交 `92cd3db`；随后更新
+   `VITE_APP_RELEASE=92cd3db` 并重试同一提交，部署在 34 秒内成功。
+10. 生产 `/performance` 已实际显示新版 Hero、独立筛选栏、五项指标卡片、健康
+    概览、单样本趋势说明、route 表和错误分布；趋势选择从 LCP 切换到 TTFB 正常。
+11. 公开生产 bundle 已核对包含 `VITE_APP_RELEASE:"92cd3db"` 和
+    `VITE_PERFORMANCE_ENABLED:"true"`。
 
 浏览器 SDK 源码位置：
 
