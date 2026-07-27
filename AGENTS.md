@@ -105,3 +105,6 @@ Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
   subnet 内运行 `PERFORMANCE_PROCESSOR_MODE=migrate` 一次性 Fargate Task；迁移
   文件随不可变镜像发布，Secret 只由 ECS 注入，workflow 只等待精确 task 的 exit
   code，并在失败或取消时停止该 task。
+- [F7-L11] 新功能共用生产数据库时，迁移成功和“原功能未受影响”是两项独立证据。
+  先审查新增 migration 只包含预期的 additive DDL，再核对一次性任务退出码和日志，
+  最后对原有读路径做只读冒烟；不能仅凭 migration command 返回 0 就断言兼容。

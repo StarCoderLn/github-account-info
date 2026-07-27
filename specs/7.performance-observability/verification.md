@@ -2,53 +2,113 @@
 
 更新时间：2026-07-27（Asia/Shanghai）
 
-## 已完成
+## 最终状态
 
-- PR #22 已合并到 `master`，合并提交：
-  `8fb51a413bc7f4b12c1e5965706084d8d451fb4b`。
+- PR #22、#23 已合并到 `master`；最终验收提交为
+  `3f0efe1a177dbfff467c326dedf6b8de6118323f`。
 - `github-account-info-performance-deployer-policy`：
-  `CREATE_COMPLETE`。
+  `UPDATE_COMPLETE`。
 - `github-account-info-performance`：
-  `CREATE_COMPLETE`。
-- 首次运行时 Change Set：
-  `performance-runtime-30251992584`，审查参数
-  `DesiredCount=0`、`ImageTag=prod-8fb51a413bc7f4b12c1e5965706084d8d451fb4b`。
+  `UPDATE_COMPLETE`。
 - ECS Service `github-account-info-performance`：
-  `ACTIVE`，`desired=0`、`running=0`、`pending=0`。
-- 不可变 ECR 镜像已推送：
-  `prod-8fb51a413bc7f4b12c1e5965706084d8d451fb4b`，
-  digest `sha256:0005d103cbbc00c5eec161bb43de0fe96a5663361b812125dc30600dd4316bec`。
-- Node Lambda 手工重新发布 run `30252625642`：Success。`live` alias 已晋级到
-  version `7`，无附加 canary weight；只读核对确认
-  `PERFORMANCE_QUEUE_URL` 指向本功能主队列。
-- Cloudflare Pages production 已保存
+  `ACTIVE`，`desired=0`、`running=0`、`pending=0`，rollout
+  `COMPLETED`。
+- 当前 Task Definition：
+  `github-account-info-performance:2`。
+- 当前不可变镜像：
+  `prod-3f0efe1a177dbfff467c326dedf6b8de6118323f`，
+  digest `sha256:44ed86fab680c7b2c0d97ea16005377a1a9e3e69e2b8b5e204b03b5d1ebe05b3`。
+- Performance 主队列可见、处理中和延迟消息均为 `0`；DLQ 消息为 `0`。
+- Node Lambda `live` alias 已接入 Performance Queue；此前发布 run
+  `30252625642` 成功，alias version 为 `7`，无附加 canary weight。
+- Cloudflare Pages production 运行提交 `3f0efe1`。生产变量为
   `VITE_PERFORMANCE_ENABLED=true`、`VITE_APP_ENVIRONMENT=production`、
-  `VITE_APP_RELEASE=8fb51a4`。变量会在下一次 production 构建生效；processor
-  尚为 0 时未手工重部署，避免提前持续写入队列。
+  `VITE_APP_RELEASE=3f0efe1`，deployment
+  `aefdd1d2-7937-48c2-b836-1f57e8369dee` 构建成功。
 
-GitHub Actions 证据：
+闲置状态保持 `DesiredCount=0`，因此没有常驻 Fargate task 费用。Queue、ECR、
+CloudWatch Logs 和 alarms 等按各自用量或保留量计费。
+
+## 数据库迁移
+
+一次性迁移 workflow run `30254570385` 成功：
+
+- ECS task：
+  `arn:aws:ecs:us-east-2:879980498268:task/github-account-info-go/077a94c27ee546bdb66da7331c7de4ed`
+- Task Definition：`github-account-info-performance:2`
+- override：`PERFORMANCE_PROCESSOR_MODE=migrate`
+- 最终状态：`STOPPED`
+- 容器退出码：`0`
+- CloudWatch 日志：
+  `performance database migrations completed`
+
+`0004_cheerful_lightspeed.sql` 只创建独立 `performance_event` 表和 3 个索引，
+没有 `ALTER`、`DROP`、重命名或原业务表数据回填。迁移后只读冒烟验证确认：
+
+- `/` Token 管理成功读取原有 `StarCoderLn` 账号及统计数据。
+- `/ops` 成功读取原有 AI Ops 调查列表、证据和结论。
+
+## 真实链路验收
+
+短时把 ECS processor 切到 `DesiredCount=1` 后：
+
+1. `POST /api/v1/performance/events` 返回 `202 {"accepted":7}`。
+2. 批次包含 LCP、INP、CLS、FCP、TTFB、page-view 和受控 error。
+3. SQS 消息被消费，processor 日志记录：
+   `received=7`、`inserted=7`、`duplicates=0`。
+4. 日志中的 7 条事件均完成 schema 校验、route 归一化和字段清洗。
+5. `/performance` 从 PostgreSQL 真实回读并显示：
+   - LCP p75：`1.80 s`
+   - INP p75：`120 ms`
+   - CLS p75：`0.050`
+   - FCP p75：`900 ms`
+   - TTFB p75：`240 ms`
+   - 前端错误：`1`
+   - 页面访问：`1`
+   - 事件处理延迟 p75：`37.84 s`
+6. route 表 `/performance` 同时展示五项 p75。
+7. 生产域名的 CORS OPTIONS 返回 `204`，带生产 Origin 的 POST 返回 `202`
+   和正确的 `access-control-allow-origin`。
+8. 生产 JS 已确认包含启用后的 SDK 配置、当前 release、接收路径和可下载的动态
+   SDK chunk。
+
+浏览器 SDK 源码位置：
+
+- `packages/performance-sdk/src/monitor.ts`
+- `packages/performance-sdk/src/sanitize.ts`
+- `packages/performance-sdk/src/index.ts`
+- `apps/web/src/utils/performance-monitor.ts`
+- `apps/web/src/main.tsx`
+
+Chrome 自动化的后台标签页没有产生可稳定观察的定时 flush；其控制扩展日志存在
+后台消息通道告警。因此云端验收使用相同生产 Origin 的真实 HTTP 批次验证接收链路，
+并以生产构建产物核对 SDK 开关和动态 chunk。真实前台访问继续由 SDK 正常采样。
+
+## GitHub Actions 证据
 
 | Run | 操作 | 结果 |
 | --- | --- | --- |
-| `30251725552` | 创建 deployer policy Change Set | Success |
-| `30251838813` | 执行 deployer policy Change Set | Success |
-| `30251992584` | 创建 DesiredCount=0 runtime Change Set | Success |
-| `30252143585` | 执行 runtime Change Set | Success |
-| `30252464818` | 测试、构建并推送 processor 镜像 | Success |
-| `30252625642` | 重新发布 Node Lambda 并接入 Performance Queue | Success |
+| `30253932166` | 创建 migration 所需 deployer policy Change Set | Success |
+| `30254031079` | 执行 deployer policy Change Set | Success |
+| `30254128815` | 测试、构建并推送最终 processor 镜像 | Success |
+| `30254256047` | 创建新镜像、DesiredCount=0 runtime Change Set | Success |
+| `30254367512` | 执行零副本 runtime 更新 | Success |
+| `30254570385` | 运行一次性 ECS 数据库迁移 | Success |
+| `30254805191` | 创建短时 DesiredCount=1 验收 Change Set | Success |
+| `30254900836` | 执行短时 processor 启动 | Success |
+| `30255319642` | 创建首次验收归零 Change Set | Success |
+| `30255424267` | 执行首次验收归零 | Success |
+| `30255532100` | 创建 CORS 探针排空启动 Change Set | Success |
+| `30255622992` | 执行 CORS 探针排空启动 | Success |
+| `30255701243` | 创建最终 DesiredCount=0 Change Set | Success |
+| `30255789790` | 执行最终归零 | Success |
 
-所有写操作均由 `github-actions-deployer` 的 GitHub OIDC 短期凭证完成。本机 AWS
-root 凭证只用于 `describe-*` / `get-*` 只读核对。
+所有 AWS 写操作均由 `github-actions-deployer` 的 GitHub OIDC 短期凭证完成。本机
+AWS root 凭证只用于 `describe-*` / `get-*` / `list-*` 只读核对。
 
-自动 Lambda run `30251601982` 发生在 performance stack 创建前，空
-`PerformanceQueueUrl` 被 SAM CLI 拒绝。stack 创建后重新发布已成功，不再是当前
-故障。
+## 保留项
 
-## 后续验收
-
-- 合并一次性 ECS migration 流程，更新 deployer policy 和 processor 镜像。
-- 以 `DesiredCount=0` 更新 Task Definition 到新镜像，运行 `migrate-database`。
-- 配置 Cloudflare Pages production SDK 变量。
-- 短时将 processor 切到 `DesiredCount=1`，验证 API → SQS → ECS →
-  CloudWatch/PostgreSQL → `/performance` 五指标。
-- 验收后恢复 `DesiredCount=0`，再把本文件和 `tasks.md` 更新为最终事实。
+- 未做真实暂时性数据库故障和 DLQ redrive 演练。该演练会影响共享 RDS 或故意制造
+  重试积压，不属于本次低风险验收范围。
+- 生产低流量阶段继续保持 `DesiredCount=0`。需要观察真实 RUM 数据时，按运行手册
+  通过 reviewed Change Set 短时切到 1，消费完成后恢复为 0。
