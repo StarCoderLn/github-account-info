@@ -9,8 +9,10 @@ AI Ops Agent 是当前项目的第四阶段运维能力。它建立在已经完�
 只读调查结果。
 
 <Callout title="当前完成状态">
-  代码侧 MVP 与部署准备已经完成；AWS stack、GitHub Models Secret、Node server
-  云端接入及真实故障演练尚未完成。因此当前不能描述为已经全部上线。
+  AWS stack、GitHub Models Secret、Node server 接入和受控手工调查真实链路均已
+  完成验收。调查已完整经历 Node API、DynamoDB、SQS、Investigator Lambda、
+  GitHub Models 和 DynamoDB 回写，并由 `ops.get` 读到 completed。自动告警状态
+  变化、profile events DLQ 演练和首周费用观察仍是保留项。
 </Callout>
 
 ## 架构

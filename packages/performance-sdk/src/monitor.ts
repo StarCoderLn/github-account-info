@@ -23,6 +23,7 @@ export type PerformanceMonitorConfig = {
 	sampleRate?: number;
 	flushIntervalMs?: number;
 	batchSize?: number;
+	trackInitialPageView?: boolean;
 };
 
 export type CustomPerformanceEvent = {
@@ -36,7 +37,7 @@ export type PerformanceMonitor = {
 	stop(): void;
 	flush(): Promise<void>;
 	track(event: CustomPerformanceEvent): void;
-	trackPageView(): void;
+	trackPageView(route?: string): void;
 };
 
 type BrowserDependencies = {
@@ -84,7 +85,7 @@ export function createPerformanceMonitor(
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let resourceObserver: PerformanceObserver | undefined;
 
-	const common = () => ({
+	const common = (route?: string) => ({
 		schemaVersion: PERFORMANCE_SCHEMA_VERSION,
 		eventId: createEventId(),
 		occurredAt: new Date().toISOString(),
@@ -92,7 +93,7 @@ export function createPerformanceMonitor(
 		environment: config.environment,
 		release: config.release,
 		sessionId,
-		route: sanitizeRoute(browser?.window.location.href ?? "/"),
+		route: sanitizeRoute(route ?? browser?.window.location.href ?? "/"),
 	});
 
 	const enqueue = (event: PerformanceEvent) => {
@@ -165,7 +166,7 @@ export function createPerformanceMonitor(
 		}
 	};
 
-	const trackPageView = () => {
+	const trackPageView = (route?: string) => {
 		if (!browser) {
 			return;
 		}
@@ -173,7 +174,7 @@ export function createPerformanceMonitor(
 			| PerformanceNavigationTiming
 			| undefined;
 		enqueue({
-			...common(),
+			...common(route),
 			type: "page-view",
 			name: "page-load",
 			value: Math.max(0, navigation?.duration ?? 0),
@@ -244,7 +245,9 @@ export function createPerformanceMonitor(
 			return;
 		}
 		started = true;
-		trackPageView();
+		if (config.trackInitialPageView !== false) {
+			trackPageView();
+		}
 		browser.window.addEventListener("error", errorListener);
 		browser.window.addEventListener("unhandledrejection", rejectionListener);
 		browser.document.addEventListener("visibilitychange", visibilityListener);

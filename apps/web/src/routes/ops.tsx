@@ -387,8 +387,8 @@ function OpsPage() {
 				</div>
 			</section>
 
-			<div className="grid gap-4 md:grid-cols-[260px_1fr]">
-				<section className="h-full rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+			<div className="grid items-start gap-4 md:grid-cols-[260px_1fr]">
+				<section className="self-start rounded-xl border border-gray-200 bg-white p-5 shadow-sm md:sticky md:top-4">
 					<div className="flex items-start justify-between gap-2">
 						<div>
 							<h2 className="font-medium text-gray-800">调查记录</h2>
@@ -410,7 +410,14 @@ function OpsPage() {
 							/>
 						</Button>
 					</div>
-					<div className="mt-4 grid h-64 content-start gap-2 overflow-y-auto">
+					<div
+						className={cn(
+							"mt-4 grid content-start gap-2",
+							incidentsQuery.isLoading || incidents.length === 0
+								? "h-64"
+								: "max-h-[36rem] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable] [scrollbar-width:thin] md:max-h-[calc(100vh-9rem)]",
+						)}
+					>
 						{incidentsQuery.isLoading ? (
 							<div className="grid h-64 grid-rows-3 gap-2 overflow-hidden">
 								{Array.from({ length: 3 }, (_, index) => (
@@ -456,7 +463,7 @@ function OpsPage() {
 					</div>
 				</section>
 
-				<section className="h-full rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+				<section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
 					<div className="flex items-center gap-2">
 						<div className="flex size-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
 							<Bot className="size-4" aria-hidden="true" />

@@ -50,6 +50,8 @@ APM 平台。
   错误分布；无样本时显示明确空状态。
 - [ ] F-017：前端 procedure 输出类型必须通过 `inferRouterOutputs<AppRouter>`
   推导，不手写重复接口。
+- [ ] F-018：页面访问事件必须覆盖首次文档加载和 TanStack Router 的真实 path
+  切换；query/hash 变化不重复计数，SDK 延迟加载期间的路由事件不得静默丢失。
 
 ## 非功能需求
 
@@ -63,6 +65,8 @@ APM 平台。
 - [ ] NF-007：事件默认保留 7 天，清理任务只删除明确早于保留边界的性能事件。
 - [ ] NF-008：所有 package 自己提供适用的 test/check-types/build 任务，根目录
   只通过 Turborepo 调度。
+- [ ] NF-009：低流量 processor 必须允许 ECS Service 缩容到 0；SQS 出现积压时
+  自动扩到最多 1 个 task，可见和处理中消息连续排空后才允许缩回 0。
 
 ## 第一版不做
 
@@ -72,7 +76,8 @@ APM 平台。
 - Source map 上传和堆栈符号化。
 - 浏览器直连 CloudWatch 或任何 AWS 服务。
 - 将 processor 合并到 Go API Stable/Canary Service。
-- 根据性能异常自动扩容、回滚或执行修复。
+- 根据 Web Vitals 评级自动扩容、回滚或执行修复。SQS 工作量驱动的 processor
+  0→1→0 容量管理属于消费链路自身，不属于业务性能自动修复。
 
 ## 验收标准
 
@@ -86,3 +91,5 @@ APM 平台。
   CloudWatch、数据库或 API 响应。
 - [ ] AC-007：processor 停止时主队列积压并触发年龄告警；恢复后继续消费。
 - [ ] AC-008：重复投递同一 `eventId` 不产生重复数据库记录。
+- [ ] AC-009：首次打开和 SPA path 切换均产生独立 `page-view`；SQS 积压可把
+  processor 从 0 拉到 1，排空后自动恢复 0。

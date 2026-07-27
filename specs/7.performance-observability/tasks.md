@@ -14,6 +14,8 @@
 - [x] T-203：实现批量、定时、visibility/sendBeacon、fetch fallback 和队列上限。
 - [x] T-204：实现 URL 清理、字段限制、采样和幂等 start/stop。
 - [x] T-205：在 web 生产入口延迟初始化 SDK。
+- [x] T-206：监听 TanStack Router 已完成的 path 切换，补采 SPA `page-view`，
+  并缓存 SDK 就绪前的有界 route 事件。
 
 ## 接收入口和队列
 
@@ -30,6 +32,8 @@
 - [x] T-404：实现 event ID 幂等批量入库和 7 天清理命令。
 - [x] T-405：创建 ECR、TaskDefinition、Task Role、Service 和 Log Group IaC。
 - [x] T-406：增加 OIDC 驱动的一次性 ECS 数据库迁移模式，Secret 不离开 ECS。
+- [x] T-407：增加 SQS backlog 驱动的 ECS Service 0→1→0 自动伸缩、排空保护
+  和最小部署权限。
 
 ## 统计 API 和页面
 
@@ -59,3 +63,5 @@
 - [x] T-706：验证新增迁移只创建 performance 表/索引，并完成 Token 管理与
   AI Ops 原功能只读冒烟。
 - [x] T-707：验收后恢复 ECS `DesiredCount=0`，确认主队列和 DLQ 均无积压。
+- [ ] T-708：通过 reviewed Change Set 部署自动伸缩策略，验证真实浏览器首访与
+  SPA 跳转均入队、processor 自动启动、数据入库并在排空后恢复 0。

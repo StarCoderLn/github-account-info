@@ -35,5 +35,10 @@ if (!rootElement) {
 if (!rootElement.innerHTML) {
 	const root = ReactDOM.createRoot(rootElement);
 	root.render(<RouterProvider router={router} />);
-	startPerformanceMonitoring();
+	const performanceMonitoring = startPerformanceMonitoring();
+	router.subscribe("onResolved", (event) => {
+		if (event.fromLocation && event.pathChanged) {
+			performanceMonitoring.trackPageView(event.toLocation.href);
+		}
+	});
 }

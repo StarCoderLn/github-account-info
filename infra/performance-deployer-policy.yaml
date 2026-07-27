@@ -87,6 +87,33 @@ Resources:
               - ecs:UntagResource
               - ecs:UpdateService
             Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${FoundationProjectName}/${ProjectName}
+          - Sid: ManageOnlyPerformanceEcsAutoScaling
+            Effect: Allow
+            Action:
+              - application-autoscaling:DeleteScalingPolicy
+              - application-autoscaling:DeregisterScalableTarget
+              - application-autoscaling:PutScalingPolicy
+              - application-autoscaling:RegisterScalableTarget
+            Resource: "*"
+            Condition:
+              StringEquals:
+                application-autoscaling:service-namespace: ecs
+                application-autoscaling:scalable-dimension: ecs:service:DesiredCount
+          - Sid: ObserveEcsAutoScaling
+            Effect: Allow
+            Action:
+              - application-autoscaling:DescribeScalableTargets
+              - application-autoscaling:DescribeScalingActivities
+              - application-autoscaling:DescribeScalingPolicies
+            Resource: "*"
+          - Sid: CreateOnlyEcsAutoScalingServiceLinkedRole
+            Effect: Allow
+            Action: iam:CreateServiceLinkedRole
+            Resource: !Sub >-
+              arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+            Condition:
+              StringLike:
+                iam:AWSServiceName: ecs.application-autoscaling.amazonaws.com
           - Sid: RunOnlyPerformanceMigrationTask
             Effect: Allow
             Action:
@@ -181,6 +208,8 @@ Resources:
             Resource:
               - !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ProjectName}-dlq-not-empty
               - !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ProjectName}-oldest-message
+              - !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ProjectName}-queue-scale-out
+              - !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ProjectName}-queue-scale-in
           - Sid: DescribeAlarmsForDeployment
             Effect: Allow
             Action: cloudwatch:DescribeAlarms

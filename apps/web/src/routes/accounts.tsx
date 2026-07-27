@@ -9,10 +9,18 @@ import {
 	AlertDialogTitle,
 } from "@github-account-info/ui/components/alert-dialog";
 import { Button } from "@github-account-info/ui/components/button";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
-import { Plus } from "lucide-react";
-import { useState } from "react";
+import {
+	Card,
+	CardAction,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from "@github-account-info/ui/components/card";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Plus, UsersRound } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
 	AccountFormDialog,
@@ -20,6 +28,7 @@ import {
 } from "@/components/accounts/account-form-dialog";
 import type { AccountRow } from "@/components/accounts/account-table";
 import { AccountTable } from "@/components/accounts/account-table";
+import { getTokens, type SavedToken } from "@/utils/token-store";
 import { trpc } from "@/utils/trpc";
 
 export const Route = createFileRoute("/accounts")({
@@ -61,17 +70,30 @@ function toFormValues(row: AccountRow): Partial<AccountFormValues> {
 // ---------------------------------------------------------------------------
 
 function AccountsPage() {
+	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 
 	const [formOpen, setFormOpen] = useState(false);
 	const [editAccount, setEditAccount] = useState<AccountRow | null>(null);
 	const [deleteTarget, setDeleteTarget] = useState<AccountRow | null>(null);
+	const [localTokens, setLocalTokens] = useState<SavedToken[]>([]);
 
 	// ── Mutations ────────────────────────────────────────────────────────────
 
+	const listQuery = useQuery(trpc.account.list.queryOptions());
 	const createMut = useMutation(trpc.account.create.mutationOptions());
 	const updateMut = useMutation(trpc.account.update.mutationOptions());
 	const deleteMut = useMutation(trpc.account.delete.mutationOptions());
+
+	useEffect(() => setLocalTokens(getTokens()), []);
+
+	const manageableLogins = useMemo(
+		() => new Set(localTokens.map((token) => token.login)),
+		[localTokens],
+	);
+
+	const canManage = (account: AccountRow) =>
+		manageableLogins.has(account.login);
 
 	// ── Event handlers ───────────────────────────────────────────────────────
 
@@ -81,12 +103,27 @@ function AccountsPage() {
 	};
 
 	const handleEdit = (account: AccountRow) => {
+		if (!canManage(account)) {
+			toast.error("当前浏览器没有该账号的 Token，只能查看公开资料");
+			return;
+		}
 		setEditAccount(account);
 		setFormOpen(true);
 	};
 
 	const handleDelete = (account: AccountRow) => {
+		if (!canManage(account)) {
+			toast.error("当前浏览器没有该账号的 Token，不能删除该账号");
+			return;
+		}
 		setDeleteTarget(account);
+	};
+
+	const handleView = (account: AccountRow) => {
+		void navigate({
+			to: "/u/$username",
+			params: { username: account.login },
+		});
 	};
 
 	async function handleFormSubmit(values: AccountFormValues) {
@@ -145,25 +182,67 @@ function AccountsPage() {
 	// ── Render ───────────────────────────────────────────────────────────────
 
 	return (
-		<div className="container mx-auto max-w-5xl px-4 py-6">
-			<div className="mb-6 flex items-center justify-between">
-				<h1 className="font-medium text-lg">GitHub Accounts</h1>
-				<Button onClick={handleAdd}>
-					<Plus />
-					新增账户
+		<div className="flex flex-col gap-6">
+			<div className="flex flex-wrap items-end justify-between gap-4">
+				<div>
+					<p className="font-medium text-blue-600 text-xs tracking-[0.16em]">
+						ACCOUNT DIRECTORY
+					</p>
+					<h1 className="text-balance font-semibold text-2xl tracking-tight">
+						GitHub 账号管理
+					</h1>
+					<p className="mt-1 text-muted-foreground">
+						有本地 Token 的账号可以管理，其他账号仅可查看公开资料。
+					</p>
+				</div>
+				<Button
+					onClick={handleAdd}
+					className="rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+				>
+					<Plus data-icon="inline-start" />
+					新增账号
 				</Button>
 			</div>
 
-			<AccountTable
-				onAdd={handleAdd}
-				onEdit={handleEdit}
-				onDelete={handleDelete}
-			/>
+			<Card className="rounded-2xl bg-white shadow-sm ring-blue-100">
+				<CardHeader className="border-blue-100 border-b bg-gradient-to-r from-blue-50/80 to-transparent">
+					<div className="flex items-center gap-3">
+						<div className="flex size-10 items-center justify-center rounded-xl bg-blue-100 text-blue-600">
+							<UsersRound className="size-5" aria-hidden="true" />
+						</div>
+						<div>
+							<CardTitle>账号目录</CardTitle>
+							<CardDescription>
+								操作权限以当前浏览器保存的账号 Token 为准。
+							</CardDescription>
+						</div>
+					</div>
+					<CardAction className="rounded-full bg-blue-50 px-3 py-1.5 text-blue-700 tabular-nums ring-1 ring-blue-100">
+						{listQuery.data?.length ?? 0} 个账号
+					</CardAction>
+				</CardHeader>
+				<CardContent className="px-0">
+					<AccountTable
+						data={listQuery.data}
+						isLoading={listQuery.isLoading}
+						canManage={canManage}
+						onAdd={handleAdd}
+						onView={handleView}
+						onEdit={handleEdit}
+						onDelete={handleDelete}
+					/>
+				</CardContent>
+			</Card>
 
 			{/* Create / Edit dialog */}
 			<AccountFormDialog
 				open={formOpen}
-				onOpenChange={setFormOpen}
+				onOpenChange={(open) => {
+					setFormOpen(open);
+					if (!open) {
+						setEditAccount(null);
+					}
+				}}
 				editId={editAccount?.id}
 				defaultValues={editAccount ? toFormValues(editAccount) : undefined}
 				onSubmit={handleFormSubmit}

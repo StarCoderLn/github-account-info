@@ -44,8 +44,10 @@ processor 启动后及每 24 小时执行一次明确的 7 天保留清理；清
 3. 审查 UPDATE Change Set，把相同 `ImageTag` 和 `DesiredCount=0` 传入。
 4. 通过 workflow 的 `migrate-database` 启动一次性 Fargate Task；迁移使用镜像内
    `/app/migrations`、RDS CA 和 ECS Secret，成功后 exit code 为 0。
-5. 再审查 `DesiredCount=1` 的 UPDATE Change Set，等待 ECS service stable，并
-   检查 queue、CloudWatch 和数据库。
+5. 更新后的 stack 使用 Application Auto Scaling 管理 `DesiredCount`：队列出现
+   可见消息后从 0 扩到 1，可见与处理中消息连续排空 3 分钟后缩回 0。
+6. 首次部署或自动伸缩验收仍必须通过 reviewed Change Set；不要直接运行
+   `aws ecs update-service`，避免 CloudFormation 与 scalable target 状态漂移。
 
 构建上下文必须是仓库根目录：
 

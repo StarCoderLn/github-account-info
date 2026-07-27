@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 const performance = read("../performance.yaml");
+const deployerPolicy = read("../performance-deployer-policy.yaml");
 const server = read("../../apps/server/template.yaml");
 const deployScript = read("../../apps/server/deploy-canary.sh");
 
@@ -12,6 +13,12 @@ for (const expected of [
 	"ReceiveMessageWaitTimeSeconds: 20",
 	"PerformanceTaskDefinition:",
 	"PerformanceService:",
+	"PerformanceScalableTarget:",
+	"MinCapacity: 0",
+	"MaxCapacity: 1",
+	"PerformanceQueueBacklogAlarm:",
+	"PerformanceQueueDrainedAlarm:",
+	"ApproximateNumberOfMessagesNotVisible",
 	"DesiredCount:",
 	"AssignPublicIp: DISABLED",
 	"ReadonlyRootFilesystem: true",
@@ -24,7 +31,7 @@ for (const expected of [
 }
 
 assertOccurrenceCount(performance, "Type: AWS::SQS::Queue\n", 2);
-assertOccurrenceCount(performance, "Type: AWS::CloudWatch::Alarm", 2);
+assertOccurrenceCount(performance, "Type: AWS::CloudWatch::Alarm", 4);
 assertOccurrenceCount(performance, "SqsManagedSseEnabled: true", 2);
 
 for (const forbidden of [
@@ -37,6 +44,33 @@ for (const forbidden of [
 	if (performance.includes(forbidden)) {
 		throw new Error(
 			`performance boundary contains forbidden value ${forbidden}`,
+		);
+	}
+}
+
+for (const expected of [
+	"ManageOnlyPerformanceEcsAutoScaling",
+	"application-autoscaling:RegisterScalableTarget",
+	"application-autoscaling:PutScalingPolicy",
+	"application-autoscaling:service-namespace: ecs",
+	"application-autoscaling:scalable-dimension: ecs:service:DesiredCount",
+	"CreateOnlyEcsAutoScalingServiceLinkedRole",
+	"iam:AWSServiceName: ecs.application-autoscaling.amazonaws.com",
+	"ProjectName}-queue-scale-out",
+	"ProjectName}-queue-scale-in",
+]) {
+	assertIncludes(deployerPolicy, expected);
+}
+
+for (const forbidden of [
+	"application-autoscaling:*",
+	"iam:*",
+	"ecs:*",
+	"cloudwatch:*",
+]) {
+	if (deployerPolicy.includes(forbidden)) {
+		throw new Error(
+			`performance deployer policy contains forbidden value ${forbidden}`,
 		);
 	}
 }
