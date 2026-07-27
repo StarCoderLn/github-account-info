@@ -17,12 +17,29 @@ import {
 	TableHeader,
 	TableRow,
 } from "@github-account-info/ui/components/table";
+import { cn } from "@github-account-info/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import type { inferRouterOutputs } from "@trpc/server";
-import { Activity, RefreshCw, TriangleAlert } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import {
+	Activity,
+	Bug,
+	ChartNoAxesCombined,
+	CircleCheck,
+	Clock3,
+	Eye,
+	Gauge,
+	Layers3,
+	MousePointerClick,
+	Paintbrush,
+	RefreshCw,
+	Server,
+	Sparkles,
+	TriangleAlert,
+	Zap,
+} from "lucide-react";
 import { useMemo, useState } from "react";
-
 import { trpc } from "@/utils/trpc";
 
 export const Route = createFileRoute("/performance")({
@@ -49,6 +66,24 @@ const RATING_LABELS: Record<NonNullable<Metric["rating"]>, string> = {
 	poor: "较差",
 };
 
+const METRIC_ICONS: Record<MetricName, LucideIcon> = {
+	LCP: Layers3,
+	INP: MousePointerClick,
+	CLS: Gauge,
+	FCP: Paintbrush,
+	TTFB: Server,
+};
+
+function ratingClassName(metric: Metric): string {
+	if (metric.rating === "poor") {
+		return "text-destructive";
+	}
+	if (metric.rating === "good") {
+		return "text-primary";
+	}
+	return "text-muted-foreground";
+}
+
 function formatMetric(name: MetricName, value: number | null): string {
 	if (value === null) {
 		return "暂无数据";
@@ -72,23 +107,39 @@ function formatDuration(value: number | null): string {
 }
 
 function MetricCard({ metric }: { metric: Metric }) {
+	const Icon = METRIC_ICONS[metric.name];
+	const StatusIcon = metric.rating === "poor" ? TriangleAlert : CircleCheck;
+
 	return (
-		<Card size="sm">
-			<CardHeader>
-				<CardTitle>{metric.name} p75</CardTitle>
-				<CardDescription>{METRIC_DESCRIPTIONS[metric.name]}</CardDescription>
-				<CardAction>
+		<Card className="min-h-44 rounded-xl shadow-sm" size="sm">
+			<CardHeader className="gap-3">
+				<div className="flex size-9 items-center justify-center rounded-lg bg-muted">
+					<Icon className="size-4" aria-hidden="true" />
+				</div>
+				<CardAction
+					className={cn(
+						"flex items-center gap-1.5 font-medium",
+						ratingClassName(metric),
+					)}
+				>
+					<StatusIcon className="size-3.5" aria-hidden="true" />
 					{metric.rating ? RATING_LABELS[metric.rating] : "等待样本"}
 				</CardAction>
+				<div>
+					<CardTitle>{metric.name} p75</CardTitle>
+					<CardDescription>{METRIC_DESCRIPTIONS[metric.name]}</CardDescription>
+				</div>
 			</CardHeader>
-			<CardContent>
-				<p className="font-semibold text-2xl">
+			<CardContent className="flex flex-1 flex-col justify-end gap-3">
+				<p className="font-semibold text-3xl tracking-tight">
 					{formatMetric(metric.name, metric.p75)}
 				</p>
-				<p className="mt-1 text-muted-foreground">
-					p50 {formatMetric(metric.name, metric.p50)} · p95{" "}
-					{formatMetric(metric.name, metric.p95)} · {metric.count} 个样本
-				</p>
+				<div className="grid grid-cols-2 gap-2 border-t pt-3 text-muted-foreground">
+					<span>p50 {formatMetric(metric.name, metric.p50)}</span>
+					<span className="text-right">
+						p95 {formatMetric(metric.name, metric.p95)}
+					</span>
+				</div>
 			</CardContent>
 		</Card>
 	);
@@ -98,19 +149,26 @@ function SummaryCard({
 	title,
 	description,
 	value,
+	icon: Icon,
 }: {
 	title: string;
 	description: string;
 	value: string;
+	icon: LucideIcon;
 }) {
 	return (
-		<Card size="sm">
-			<CardHeader>
-				<CardTitle>{title}</CardTitle>
-				<CardDescription>{description}</CardDescription>
-			</CardHeader>
-			<CardContent>
-				<p className="font-semibold text-2xl">{value}</p>
+		<Card className="rounded-xl shadow-sm" size="sm">
+			<CardContent className="flex items-center gap-4 py-2">
+				<div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-muted">
+					<Icon className="size-5" aria-hidden="true" />
+				</div>
+				<div className="min-w-0 flex-1">
+					<p className="font-medium">{title}</p>
+					<p className="truncate text-muted-foreground">{description}</p>
+				</div>
+				<p className="shrink-0 font-semibold text-2xl tracking-tight">
+					{value}
+				</p>
 			</CardContent>
 		</Card>
 	);
@@ -136,21 +194,35 @@ function TrendChart({
 
 	if (points.length === 0) {
 		return (
-			<div className="flex min-h-64 items-center justify-center text-muted-foreground">
-				暂无 {metricName} 趋势数据
+			<div className="flex min-h-60 flex-col items-center justify-center gap-3 rounded-xl bg-muted/40 text-center text-muted-foreground">
+				<div className="flex size-11 items-center justify-center rounded-full bg-background">
+					<ChartNoAxesCombined className="size-5" aria-hidden="true" />
+				</div>
+				<div>
+					<p className="font-medium text-foreground">
+						暂无 {metricName} 趋势数据
+					</p>
+					<p>采集到新的时间桶后，这里会自动生成趋势线。</p>
+				</div>
 			</div>
 		);
 	}
 
 	const width = 900;
-	const height = 260;
-	const padding = 28;
-	const max = Math.max(...points.map((point) => point.p75), 1);
+	const height = 240;
+	const horizontalPadding = 44;
+	const verticalPadding = 26;
+	const max = Math.max(...points.map((point) => point.p75), 1) * 1.2;
 	const coordinates = points.map((point, index) => ({
 		x:
-			padding +
-			(index / Math.max(1, points.length - 1)) * (width - padding * 2),
-		y: height - padding - (point.p75 / max) * (height - padding * 2),
+			points.length === 1
+				? width / 2
+				: horizontalPadding +
+					(index / (points.length - 1)) * (width - horizontalPadding * 2),
+		y:
+			height -
+			verticalPadding -
+			(point.p75 / max) * (height - verticalPadding * 2),
 		label: new Date(point.bucket).toLocaleString("zh-CN", {
 			month: "2-digit",
 			day: "2-digit",
@@ -160,23 +232,49 @@ function TrendChart({
 		value: point.p75,
 	}));
 	const line = coordinates.map((point) => `${point.x},${point.y}`).join(" ");
+	const area = `${horizontalPadding},${height - verticalPadding} ${line} ${
+		width - horizontalPadding
+	},${height - verticalPadding}`;
+	const gridLines = [0, 1, 2, 3].map(
+		(index) => verticalPadding + (index / 3) * (height - verticalPadding * 2),
+	);
 
 	return (
-		<div className="overflow-x-auto">
+		<div className="flex flex-col gap-3 overflow-x-auto">
 			<svg
 				viewBox={`0 0 ${width} ${height}`}
-				className="min-w-2xl text-primary"
+				className="min-w-2xl text-chart-3"
 				role="img"
 				aria-label={`${metricName} p75 时间趋势`}
 			>
 				<title>{metricName} p75 时间趋势</title>
-				<line
-					x1={padding}
-					y1={height - padding}
-					x2={width - padding}
-					y2={height - padding}
-					stroke="currentColor"
-					opacity="0.2"
+				<defs>
+					<linearGradient
+						id={`performance-${metricName.toLowerCase()}-area`}
+						x1="0"
+						x2="0"
+						y1="0"
+						y2="1"
+					>
+						<stop offset="0%" stopColor="currentColor" stopOpacity="0.22" />
+						<stop offset="100%" stopColor="currentColor" stopOpacity="0" />
+					</linearGradient>
+				</defs>
+				{gridLines.map((y) => (
+					<line
+						key={y}
+						x1={horizontalPadding}
+						y1={y}
+						x2={width - horizontalPadding}
+						y2={y}
+						stroke="currentColor"
+						opacity="0.1"
+						strokeDasharray="4 6"
+					/>
+				))}
+				<polygon
+					points={area}
+					fill={`url(#performance-${metricName.toLowerCase()}-area)`}
 				/>
 				<polyline
 					points={line}
@@ -200,6 +298,11 @@ function TrendChart({
 					</circle>
 				))}
 			</svg>
+			{points.length === 1 ? (
+				<p className="text-center text-muted-foreground">
+					当前只有 1 个时间桶；更多样本到达后将形成连续趋势。
+				</p>
+			) : null}
 		</div>
 	);
 }
@@ -262,85 +365,140 @@ function PerformancePage() {
 	}
 
 	const overview = overviewQuery.data;
+	const healthyMetrics = overview.metrics.filter(
+		(metric) => metric.rating === "good",
+	).length;
 
 	return (
-		<div className="flex flex-col gap-6">
-			<div className="flex flex-wrap items-start justify-between gap-4">
-				<div>
-					<h1 className="font-semibold text-2xl">真实用户性能</h1>
-					<p className="mt-1 text-muted-foreground text-sm">
-						五项 Web Vitals、前端错误和异步清洗链路统计
-					</p>
+		<div className="flex flex-col gap-5">
+			<section className="overflow-hidden rounded-2xl bg-primary text-primary-foreground shadow-sm">
+				<div className="flex flex-wrap items-center justify-between gap-5 p-6 md:p-8">
+					<div className="flex items-center gap-4">
+						<div className="flex size-12 items-center justify-center rounded-2xl bg-primary-foreground/10">
+							<Sparkles className="size-6" aria-hidden="true" />
+						</div>
+						<div className="flex flex-col gap-1">
+							<p className="text-primary-foreground/70 text-xs">
+								REAL USER MONITORING
+							</p>
+							<h1 className="font-semibold text-2xl tracking-tight md:text-3xl">
+								真实用户性能
+							</h1>
+							<p className="max-w-2xl text-primary-foreground/70">
+								从浏览器采集到异步清洗，集中观察五项 Web
+								Vitals、错误与访问体验。
+							</p>
+						</div>
+					</div>
+					<div className="flex items-center gap-3 rounded-xl bg-primary-foreground/10 px-4 py-3">
+						<span className="size-2.5 rounded-full bg-primary-foreground" />
+						<div>
+							<p className="font-medium">采集链路已接入</p>
+							<p className="text-primary-foreground/70">
+								按需处理 · 数据保留 7 天 · {healthyMetrics}/5 项良好
+							</p>
+						</div>
+					</div>
 				</div>
-				<div className="flex flex-wrap items-center gap-2">
-					<label htmlFor="performance-range" className="text-sm">
-						统计范围
+			</section>
+
+			<Card className="rounded-xl shadow-sm" size="sm">
+				<CardContent className="grid items-end gap-3 py-1 sm:grid-cols-2 lg:grid-cols-[1.1fr_1fr_1fr_1fr_auto]">
+					<label className="flex flex-col gap-1.5" htmlFor="performance-range">
+						<span className="font-medium text-muted-foreground">统计范围</span>
+						<select
+							id="performance-range"
+							value={range}
+							onChange={(event) => setRange(event.target.value as Range)}
+							className="h-9 rounded-lg border bg-background px-3 text-sm"
+						>
+							<option value="1h">最近 1 小时</option>
+							<option value="24h">最近 24 小时</option>
+							<option value="7d">最近 7 天</option>
+						</select>
 					</label>
-					<select
-						id="performance-range"
-						value={range}
-						onChange={(event) => setRange(event.target.value as Range)}
-						className="h-8 rounded-md border bg-background px-2 text-sm"
-					>
-						<option value="1h">最近 1 小时</option>
-						<option value="24h">最近 24 小时</option>
-						<option value="7d">最近 7 天</option>
-					</select>
-					<select
-						aria-label="筛选运行环境"
-						value={environment}
-						onChange={(event) => setEnvironment(event.target.value)}
-						className="h-8 rounded-md border bg-background px-2 text-sm"
-					>
-						<option value="">全部环境</option>
-						{overview.filters.environments.map((value) => (
-							<option key={value} value={value}>
-								{value}
-							</option>
-						))}
-					</select>
-					<select
-						aria-label="筛选发布版本"
-						value={release}
-						onChange={(event) => setRelease(event.target.value)}
-						className="h-8 max-w-44 rounded-md border bg-background px-2 text-sm"
-					>
-						<option value="">全部版本</option>
-						{overview.filters.releases.map((value) => (
-							<option key={value} value={value}>
-								{value}
-							</option>
-						))}
-					</select>
-					<select
-						aria-label="筛选页面路由"
-						value={route}
-						onChange={(event) => setRoute(event.target.value)}
-						className="h-8 max-w-44 rounded-md border bg-background px-2 text-sm"
-					>
-						<option value="">全部路由</option>
-						{overview.filters.routes.map((value) => (
-							<option key={value} value={value}>
-								{value}
-							</option>
-						))}
-					</select>
+					<label className="flex flex-col gap-1.5">
+						<span className="font-medium text-muted-foreground">运行环境</span>
+						<select
+							aria-label="筛选运行环境"
+							value={environment}
+							onChange={(event) => setEnvironment(event.target.value)}
+							className="h-9 rounded-lg border bg-background px-3 text-sm"
+						>
+							<option value="">全部环境</option>
+							{overview.filters.environments.map((value) => (
+								<option key={value} value={value}>
+									{value}
+								</option>
+							))}
+						</select>
+					</label>
+					<label className="flex min-w-0 flex-col gap-1.5">
+						<span className="font-medium text-muted-foreground">发布版本</span>
+						<select
+							aria-label="筛选发布版本"
+							value={release}
+							onChange={(event) => setRelease(event.target.value)}
+							className="h-9 min-w-0 rounded-lg border bg-background px-3 text-sm"
+						>
+							<option value="">全部版本</option>
+							{overview.filters.releases.map((value) => (
+								<option key={value} value={value}>
+									{value}
+								</option>
+							))}
+						</select>
+					</label>
+					<label className="flex min-w-0 flex-col gap-1.5">
+						<span className="font-medium text-muted-foreground">页面路由</span>
+						<select
+							aria-label="筛选页面路由"
+							value={route}
+							onChange={(event) => setRoute(event.target.value)}
+							className="h-9 min-w-0 rounded-lg border bg-background px-3 text-sm"
+						>
+							<option value="">全部路由</option>
+							{overview.filters.routes.map((value) => (
+								<option key={value} value={value}>
+									{value}
+								</option>
+							))}
+						</select>
+					</label>
 					<Button
 						variant="outline"
 						size="sm"
 						onClick={() => overviewQuery.refetch()}
 						disabled={overviewQuery.isFetching}
+						className="h-9"
 					>
-						<RefreshCw data-icon="inline-start" />
+						<RefreshCw
+							data-icon="inline-start"
+							className={cn(overviewQuery.isFetching && "animate-spin")}
+						/>
 						刷新
 					</Button>
-				</div>
-			</div>
+				</CardContent>
+			</Card>
 
-			<section aria-labelledby="web-vitals-title">
-				<h2 id="web-vitals-title" className="sr-only">
-					五项 Web Vitals
-				</h2>
+			<section
+				aria-labelledby="web-vitals-title"
+				className="flex flex-col gap-3"
+			>
+				<div className="flex items-end justify-between gap-4">
+					<div>
+						<h2 id="web-vitals-title" className="font-semibold text-lg">
+							核心体验指标
+						</h2>
+						<p className="text-muted-foreground">
+							p75 代表 75% 用户获得的体验水平
+						</p>
+					</div>
+					<p className="hidden text-muted-foreground sm:block">
+						共 {overview.metrics.reduce((sum, metric) => sum + metric.count, 0)}{" "}
+						个指标样本
+					</p>
+				</div>
 				<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
 					{overview.metrics.map((metric) => (
 						<MetricCard key={metric.name} metric={metric} />
@@ -353,109 +511,167 @@ function PerformancePage() {
 					title="前端错误率"
 					description={`${overview.summary.errorCount} 个错误`}
 					value={`${overview.summary.errorRate.toFixed(2)}%`}
+					icon={Bug}
 				/>
 				<SummaryCard
 					title="页面访问量"
 					description={`${overview.summary.sessions} 个匿名会话`}
 					value={overview.summary.pageViews.toLocaleString("zh-CN")}
+					icon={Eye}
 				/>
 				<SummaryCard
 					title="事件处理延迟 p75"
 					description="浏览器产生到 ECS 清洗"
 					value={formatDuration(overview.summary.processingLagP75)}
+					icon={Clock3}
 				/>
 			</section>
 
-			<Card>
-				<CardHeader>
-					<CardTitle>Web Vitals p75 趋势</CardTitle>
-					<CardDescription>
-						切换查看 LCP、INP、CLS、FCP、TTFB 的真实用户趋势
-					</CardDescription>
-					<CardAction>
-						<select
-							aria-label="选择趋势指标"
-							value={activeMetric}
-							onChange={(event) =>
-								setActiveMetric(event.target.value as MetricName)
-							}
-							className="h-8 rounded-md border bg-background px-2 text-sm"
-						>
-							{overview.metrics.map((metric) => (
-								<option key={metric.name} value={metric.name}>
-									{metric.name}
-								</option>
-							))}
-						</select>
-					</CardAction>
-				</CardHeader>
-				<CardContent>
-					<TrendChart overview={overview} metricName={activeMetric} />
-				</CardContent>
-			</Card>
+			<section className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)]">
+				<Card className="rounded-xl shadow-sm">
+					<CardHeader className="border-b">
+						<CardTitle>Web Vitals p75 趋势</CardTitle>
+						<CardDescription>
+							观察所选指标在当前时间范围内的变化
+						</CardDescription>
+						<CardAction>
+							<select
+								aria-label="选择趋势指标"
+								value={activeMetric}
+								onChange={(event) =>
+									setActiveMetric(event.target.value as MetricName)
+								}
+								className="h-9 rounded-lg border bg-background px-3 text-sm"
+							>
+								{overview.metrics.map((metric) => (
+									<option key={metric.name} value={metric.name}>
+										{metric.name}
+									</option>
+								))}
+							</select>
+						</CardAction>
+					</CardHeader>
+					<CardContent>
+						<TrendChart overview={overview} metricName={activeMetric} />
+					</CardContent>
+				</Card>
 
-			<Card>
-				<CardHeader>
+				<Card className="rounded-xl shadow-sm">
+					<CardHeader className="border-b">
+						<CardTitle>性能健康概览</CardTitle>
+						<CardDescription>五项核心指标的当前评级</CardDescription>
+					</CardHeader>
+					<CardContent>
+						<ul className="flex flex-col gap-1">
+							{overview.metrics.map((metric) => {
+								const Icon = METRIC_ICONS[metric.name];
+								return (
+									<li
+										key={metric.name}
+										className="flex items-center gap-3 rounded-lg px-2 py-2.5 hover:bg-muted/60"
+									>
+										<div className="flex size-8 items-center justify-center rounded-lg bg-muted">
+											<Icon className="size-4" aria-hidden="true" />
+										</div>
+										<div className="min-w-0 flex-1">
+											<p className="font-medium">{metric.name}</p>
+											<p className="truncate text-muted-foreground">
+												{METRIC_DESCRIPTIONS[metric.name]}
+											</p>
+										</div>
+										<div className="text-right">
+											<p className={cn("font-medium", ratingClassName(metric))}>
+												{metric.rating
+													? RATING_LABELS[metric.rating]
+													: "等待样本"}
+											</p>
+											<p className="text-muted-foreground">
+												{formatMetric(metric.name, metric.p75)}
+											</p>
+										</div>
+									</li>
+								);
+							})}
+						</ul>
+					</CardContent>
+				</Card>
+			</section>
+
+			<Card className="rounded-xl shadow-sm">
+				<CardHeader className="border-b">
 					<CardTitle>按页面路由对比</CardTitle>
 					<CardDescription>
-						每个 route 的访问量与五项 Web Vitals p75
+						定位访问量高、体验表现需要优先优化的页面
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
 					{overview.routes.length === 0 ? (
-						<p className="py-12 text-center text-muted-foreground">
-							暂无可对比的页面样本
-						</p>
+						<div className="flex flex-col items-center gap-2 py-12 text-center text-muted-foreground">
+							<Eye className="size-5" aria-hidden="true" />
+							<p>暂无可对比的页面样本</p>
+						</div>
 					) : (
-						<Table>
-							<TableHeader>
-								<TableRow>
-									<TableHead>Route</TableHead>
-									<TableHead>Visits</TableHead>
-									{overview.metrics.map((metric) => (
-										<TableHead key={metric.name}>{metric.name} p75</TableHead>
-									))}
-								</TableRow>
-							</TableHeader>
-							<TableBody>
-								{overview.routes.map((route) => (
-									<TableRow key={route.route}>
-										<TableCell className="font-medium">{route.route}</TableCell>
-										<TableCell>{route.visits}</TableCell>
+						<div className="overflow-x-auto rounded-lg border">
+							<Table>
+								<TableHeader className="bg-muted/50">
+									<TableRow>
+										<TableHead>页面路由</TableHead>
+										<TableHead>访问量</TableHead>
 										{overview.metrics.map((metric) => (
-											<TableCell key={metric.name}>
-												{formatMetric(metric.name, route[metric.name])}
-											</TableCell>
+											<TableHead key={metric.name}>{metric.name} p75</TableHead>
 										))}
 									</TableRow>
-								))}
-							</TableBody>
-						</Table>
+								</TableHeader>
+								<TableBody>
+									{overview.routes.map((route) => (
+										<TableRow key={route.route}>
+											<TableCell className="font-medium">
+												{route.route}
+											</TableCell>
+											<TableCell>{route.visits}</TableCell>
+											{overview.metrics.map((metric) => (
+												<TableCell key={metric.name}>
+													{formatMetric(metric.name, route[metric.name])}
+												</TableCell>
+											))}
+										</TableRow>
+									))}
+								</TableBody>
+							</Table>
+						</div>
 					)}
 				</CardContent>
 			</Card>
 
 			<div className="grid gap-3 md:grid-cols-2">
-				<Card>
-					<CardHeader>
-						<CardTitle>慢请求排行</CardTitle>
+				<Card className="rounded-xl shadow-sm">
+					<CardHeader className="border-b">
+						<CardTitle className="flex items-center gap-2">
+							<Zap className="size-4" aria-hidden="true" />
+							慢请求排行
+						</CardTitle>
 						<CardDescription>浏览器 fetch/XHR 耗时 p95</CardDescription>
 					</CardHeader>
 					<CardContent>
 						{overview.slowRequests.length === 0 ? (
-							<p className="py-8 text-center text-muted-foreground">
-								<Activity className="mx-auto mb-2 size-5" aria-hidden="true" />
-								暂无请求性能样本
-							</p>
+							<div className="flex flex-col items-center gap-2 py-8 text-center text-muted-foreground">
+								<Activity className="size-5" aria-hidden="true" />
+								<p>暂无请求性能样本</p>
+							</div>
 						) : (
-							<ul className="flex flex-col gap-3">
-								{overview.slowRequests.map((request) => (
+							<ul className="flex flex-col gap-2">
+								{overview.slowRequests.map((request, index) => (
 									<li
 										key={request.name}
-										className="flex items-center justify-between gap-4"
+										className="flex items-center gap-3 rounded-lg bg-muted/50 px-3 py-2.5"
 									>
-										<span className="truncate">{request.name}</span>
-										<span>
+										<span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-background font-medium">
+											{index + 1}
+										</span>
+										<span className="min-w-0 flex-1 truncate">
+											{request.name}
+										</span>
+										<span className="shrink-0 font-medium">
 											{formatDuration(request.p95)} · {request.count}
 										</span>
 									</li>
@@ -465,29 +681,36 @@ function PerformancePage() {
 					</CardContent>
 				</Card>
 
-				<Card>
-					<CardHeader>
-						<CardTitle>前端错误分布</CardTitle>
+				<Card className="rounded-xl shadow-sm">
+					<CardHeader className="border-b">
+						<CardTitle className="flex items-center gap-2">
+							<TriangleAlert className="size-4" aria-hidden="true" />
+							前端错误分布
+						</CardTitle>
 						<CardDescription>按清洗后的错误类型聚合</CardDescription>
 					</CardHeader>
 					<CardContent>
 						{overview.errors.length === 0 ? (
-							<p className="py-8 text-center text-muted-foreground">
-								<TriangleAlert
-									className="mx-auto mb-2 size-5"
-									aria-hidden="true"
-								/>
-								当前范围内没有前端错误
-							</p>
+							<div className="flex flex-col items-center gap-2 py-8 text-center text-muted-foreground">
+								<CircleCheck className="size-5" aria-hidden="true" />
+								<p>当前范围内没有前端错误</p>
+							</div>
 						) : (
-							<ul className="flex flex-col gap-3">
+							<ul className="flex flex-col gap-2">
 								{overview.errors.map((error) => (
 									<li
 										key={error.name}
-										className="flex items-center justify-between gap-4"
+										className="flex items-center gap-3 rounded-lg bg-muted/50 px-3 py-2.5"
 									>
-										<span className="truncate">{error.name}</span>
-										<span>{error.count}</span>
+										<div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-background">
+											<Bug className="size-4" aria-hidden="true" />
+										</div>
+										<span className="min-w-0 flex-1 truncate">
+											{error.name}
+										</span>
+										<span className="shrink-0 font-medium">
+											{error.count} 次
+										</span>
 									</li>
 								))}
 							</ul>
