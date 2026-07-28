@@ -14,6 +14,7 @@ on:
           - execute-runtime-pause
           - recover-performance-rollback
           - finish-runtime-pause
+          - restore-production
       source_run_id:
         description: Run ID that created the reviewed change sets
         required: false
@@ -302,3 +303,40 @@ jobs:
             fi
             sleep 15
           done
+
+      - name: Restore production service
+        if: inputs.operation == 'restore-production'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stack_name="github-account-info-go-production"
+          change_set_name="restore-production-${GITHUB_RUN_ID}"
+
+          aws cloudformation describe-stacks \
+            --stack-name "$stack_name" \
+            --query 'Stacks[0].Parameters' \
+            --output json |
+            jq 'map(if .ParameterKey == "DesiredCount" then .ParameterValue = "1" elif .ParameterKey == "CanaryDesiredCount" then .ParameterValue = "0" elif .ParameterKey == "StableTrafficWeight" then .ParameterValue = "100" elif .ParameterKey == "CanaryTrafficWeight" then .ParameterValue = "0" else . end)' \
+              > /tmp/production-parameters.json
+
+          aws cloudformation create-change-set \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name" \
+            --change-set-type UPDATE \
+            --template-body file://infra/go-production.yaml \
+            --parameters file:///tmp/production-parameters.json \
+            --capabilities CAPABILITY_NAMED_IAM
+          aws cloudformation wait change-set-create-complete \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name"
+          aws cloudformation execute-change-set \
+            --stack-name "$stack_name" \
+            --change-set-name "$change_set_name"
+          aws cloudformation wait stack-update-complete --stack-name "$stack_name"
+          aws ecs wait services-stable \
+            --cluster github-account-info-go \
+            --services github-account-info-go-production
+          aws ecs describe-services \
+            --cluster github-account-info-go \
+            --services github-account-info-go-production \
+            --query 'services[0].{Name:serviceName,Desired:desiredCount,Running:runningCount,Pending:pendingCount}'
