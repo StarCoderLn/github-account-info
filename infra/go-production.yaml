@@ -66,9 +66,9 @@ Parameters:
   DesiredCount:
     Type: Number
     Default: 1
-    MinValue: 1
+    MinValue: 0
     MaxValue: 4
-    Description: Initial production task count. Version 1 defaults to one task.
+    Description: Production task count. Set 0 only for a reviewed full runtime pause.
   CanaryDesiredCount:
     Type: Number
     Default: 0

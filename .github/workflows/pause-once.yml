@@ -112,6 +112,7 @@ jobs:
             local change_set_name="$2"
             local output_file="$3"
             local extra_filter="$4"
+            local template_argument="$5"
 
             aws cloudformation describe-stacks \
               --stack-name "$stack_name" \
@@ -123,7 +124,7 @@ jobs:
               --stack-name "$stack_name" \
               --change-set-name "$change_set_name" \
               --change-set-type UPDATE \
-              --use-previous-template \
+              "$template_argument" \
               --parameters "file://${output_file}"
             aws cloudformation wait change-set-create-complete \
               --stack-name "$stack_name" \
@@ -138,20 +139,23 @@ jobs:
             github-account-info-go-production \
             "pause-production-${GITHUB_RUN_ID}" \
             /tmp/production-parameters.json \
-            'map(if .ParameterKey == "DesiredCount" or .ParameterKey == "CanaryDesiredCount" then .ParameterValue = $desired elif .ParameterKey == "StableTrafficWeight" then .ParameterValue = "100" elif .ParameterKey == "CanaryTrafficWeight" then .ParameterValue = "0" else . end)'
+            'map(if .ParameterKey == "DesiredCount" or .ParameterKey == "CanaryDesiredCount" then .ParameterValue = $desired elif .ParameterKey == "StableTrafficWeight" then .ParameterValue = "100" elif .ParameterKey == "CanaryTrafficWeight" then .ParameterValue = "0" else . end)' \
+            "--template-body=file://infra/go-production.yaml"
 
           create_desired_zero_change_set \
             github-account-info-performance \
             "pause-performance-${GITHUB_RUN_ID}" \
             /tmp/performance-parameters.json \
-            'map(if .ParameterKey == "DesiredCount" then .ParameterValue = $desired else . end)'
+            'map(if .ParameterKey == "DesiredCount" then .ParameterValue = $desired else . end)' \
+            "--use-previous-template"
 
           if aws cloudformation describe-stacks --stack-name github-account-info-go-pr-27 >/dev/null 2>&1; then
             create_desired_zero_change_set \
               github-account-info-go-pr-27 \
               "pause-preview-${GITHUB_RUN_ID}" \
               /tmp/preview-parameters.json \
-              'map(if .ParameterKey == "DesiredCount" then .ParameterValue = $desired else . end)'
+              'map(if .ParameterKey == "DesiredCount" then .ParameterValue = $desired else . end)' \
+              "--use-previous-template"
           fi
 
           echo "Runtime Change Set run ID: $GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
