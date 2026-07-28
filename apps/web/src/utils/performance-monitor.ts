@@ -43,6 +43,15 @@ export function startPerformanceMonitoring(): PerformanceMonitoring {
 				for (const route of pendingRoutes.splice(0)) {
 					monitor.trackPageView(route);
 				}
+				/**
+				 * 页面访问量属于准实时页面的核心计数，首访和 SDK 就绪前暂存的路由
+				 * 不能继续等待 5 秒周期 timer。后台标签页会节流 interval，可能让
+				 * 页面已经打开很久但访问量仍不变化。
+				 *
+				 * flush 仍由 SDK 统一执行批量上限、一次失败回填和静默降级；这里只
+				 * 提前发送已经排队的 page-view，不会让 Web Vitals 变成逐条请求。
+				 */
+				void monitor.flush();
 			})
 			.catch(() => {
 				// 监控失败不能影响业务页面；清空暂存数据，避免内存持续增长。
@@ -67,6 +76,8 @@ export function startPerformanceMonitoring(): PerformanceMonitoring {
 		trackPageView(route) {
 			if (monitor) {
 				monitor.trackPageView(route);
+				// SPA 路由访问需要尽快进入统计，不依赖可能被节流的周期 timer。
+				void monitor.flush();
 				return;
 			}
 			pendingRoutes.push(route);
