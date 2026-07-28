@@ -20,9 +20,11 @@ on:
         required: false
         type: string
       desired_count:
-        description: Runtime task count; keep 0 except during a short validation window
+        # 已有 Stack 默认进入准实时模式。首次 CREATE 仍由下方安全门强制选择 0，
+        # 因为同一个 Stack 中的 ECR 创建完成前还不存在可供 ECS 拉取的镜像。
+        description: Runtime mode; 1 keeps near-real-time processing warm, 0 enables scale-to-zero
         required: true
-        default: "0"
+        default: "1"
         type: choice
         options:
           - "0"
@@ -141,6 +143,8 @@ jobs:
             change_set_type="UPDATE"
           else
             change_set_type="CREATE"
+            # 首次创建只落 Queue/ECR/Service 等资源，不启动 Task。推送不可变镜像后，
+            # 再以 UPDATE + desired_count=1 进入准实时运行态。
             if [[ "$DESIRED_COUNT" != "0" ]]; then
               echo "The first CREATE must use desired_count=0" >&2
               exit 1

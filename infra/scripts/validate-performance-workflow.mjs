@@ -77,5 +77,5 @@ for (const forbidden of ["sqs:*", "ecr:*", "ecs:*", "iam:*", "logs:*"]) {
 }
 
 console.log(
-	"Performance manual Change Set workflow validated: OIDC-only, reviewed and default-zero",
+	"Performance Change Set workflow validated: OIDC-only, reviewed, first-create zero and near-real-time default one",
 );

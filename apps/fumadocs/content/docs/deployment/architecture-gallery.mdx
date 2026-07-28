@@ -79,7 +79,8 @@ import goProfilePlatformSvg from "./go-service/assets/go-profile-platform.svg";
 
 这张图明确区分性能事件接收、异步队列、ECS 清洗、PostgreSQL 统计查询和部署安全
 边界。核心 `API → SQS → ECS → PostgreSQL → /performance` 真实链路已经验收；
-队列驱动的 ECS 0→1→0 自动伸缩属于后续增强，状态以专题页和 verification 记录为准。
+当前分支用一个常驻 Processor 和页面 10 秒后台回读实现准实时体验；0→1→0 继续
+作为可恢复的低成本模式。部署状态以专题页和 verification 记录为准。
 
 ## 怎么选择要看的图
 

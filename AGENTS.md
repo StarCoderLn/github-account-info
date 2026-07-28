@@ -98,10 +98,11 @@ Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
   校验；只有本地 SSM `127.0.0.1` migration 才使用 `uselibpqcompat=true` 兼容
   hostname 不匹配。processor 镜像复用受版本控制的区域 CA bundle，不使用
   `rejectUnauthorized: false`。
-- [F7-L09] 低流量作业型 ECS consumer 不应默认常驻：Performance stack 首次创建
-  和日常闲置都保持 `DesiredCount=0`，仅在验收窗口通过 OIDC + 人工审查 Change
-  Set 切到 1，结束后再以 Change Set 恢复 0；禁止直接更新 ECS Service 造成
-  CloudFormation drift，也禁止使用本机 root 凭证部署。
+- [F7-L09] Performance stack 首次创建仍必须使用 `DesiredCount=0`，待 ECR 中存在
+  不可变镜像后再更新运行容量。日常运行容量由体验目标决定：准实时页面使用
+  `DesiredCount=1` 常驻；低成本模式才使用 0→1→0 自动伸缩。两种模式都必须通过
+  OIDC + 人工审查 Change Set 切换，禁止直接更新 ECS Service 造成 CloudFormation
+  drift，也禁止使用本机 root 凭证部署。
 - [F7-L10] 私有 RDS 的生产迁移不能依赖 GitHub-hosted runner 直连，也不能为了
   省事用本机 root 开 SSM 隧道。复用已审查的 ECS Task Definition，在 private
   subnet 内运行 `PERFORMANCE_PROCESSOR_MODE=migrate` 一次性 Fargate Task；迁移
@@ -118,7 +119,7 @@ Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
   固化、删除 query/fragment；SDK 延迟加载前的跳转使用有上限的内存队列暂存，同时
   跳过首次 Router resolve，避免首访重复计数。
 - [F7-L14] ECS consumer 的 `DesiredCount=0` 只省费用，不会自动处理 SQS；若页面
-  需要低成本的准实时统计，应为精确 Service 注册 `MinCapacity=0`、
+  需要低成本的自动清洗，应为精确 Service 注册 `MinCapacity=0`、
   `MaxCapacity=1` 的 scalable target。scale-out 观察 visible backlog，scale-in
   必须同时观察 visible 与 in-flight 并要求连续空闲，避免数据库写入期间停 task；
   部署和验收仍通过 reviewed Change Set，不能直接 `ecs update-service`。
@@ -126,3 +127,7 @@ Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
   页面会闪白并丢失当前阅读位置。筛选查询应使用 `keepPreviousData` 保留上一份
   成功结果、后台拉取新数据，并只在页面内提示“正在更新”；后台刷新失败时继续展示
   旧数据，只有首次请求且没有任何可用数据时才显示整页 loading/error。
+- [F7-L16] “十几秒可见”必须同时覆盖采集、清洗和回读三段：浏览器 SDK 定时发送
+  只能保证事件入队，`DesiredCount=0` 的 ECS 仍会等待 CloudWatch 指标与冷启动，
+  页面不轮询也不会自动看到新数据。准实时模式应保持一个 processor 常驻，并在页面
+  可见时用 React Query 定时后台刷新；进入后台标签页后暂停轮询，避免无效请求。

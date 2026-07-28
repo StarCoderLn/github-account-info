@@ -11,9 +11,9 @@ Performance SDK 链路。它属于 RUM（Real User Monitoring，真实用户监�
 
 <Callout title="当前完成状态">
   核心真实链路已经完成云端验收：7 条受控事件完整经过 API、SQS、ECS、
-  CloudWatch Logs 和 PostgreSQL，并由生产 `/performance` 回读。后续新增的 SPA
-  路由采集和 ECS 0→1→0 自动伸缩增强已完成代码与模板验证，但仍需通过 reviewed
-  Change Set 完成单独的云端验收；这不等于核心链路尚未上线。
+  CloudWatch Logs 和 PostgreSQL，并由生产 `/performance` 回读。当前分支进一步
+  增加 SPA 路由采集、常驻一个 Processor 和页面 10 秒后台刷新，以实现约
+  10–20 秒可见；这部分仍需通过 reviewed Change Set 和生产页面发布完成验收。
 </Callout>
 
 ## 先看结论
@@ -27,6 +27,8 @@ Performance SDK 链路。它属于 RUM（Real User Monitoring，真实用户监�
 4. 统计 API 基于原始样本计算真实 p50、p75 和 p95。
 5. `/performance` 展示五项核心指标、访问量、错误率、趋势、路由对比和慢请求。
 6. 切换时间、环境、版本或路由时保留旧数据并后台更新，不再整页白屏。
+7. 页面可见时每 10 秒回读一次；结合 SDK 约 5 秒 flush 和常驻 Processor，新数据
+   的正常目标是约 10–20 秒出现在页面。
 
 这条链路把采集、接收、清洗、存储和查询职责分开。监控功能即使暂时失败，也不应该
 阻塞用户正常使用 GitHub 账号管理、个人主页或 AI Ops 功能。
@@ -387,22 +389,26 @@ POST /api/v1/performance/events
 日志只记录稳定错误码和错误类型，不打印原始请求体，防止 URL、错误消息或凭证进入
 CloudWatch Logs。
 
-## ECS 清洗与自动伸缩
+## ECS 清洗与运行容量
 
 Processor 使用 20 秒 SQS 长轮询，依次执行契约校验、时间窗校验、route 归一化、
 凭证模式脱敏和幂等批量写入。非法契约属于永久错误，记录稳定原因后确认消费；
 数据库或 AWS 暂时故障不删除消息，由 visibility timeout 和 DLQ 负责重试。
 
-自动伸缩代码把 Service 限制为 `MinCapacity=0`、`MaxCapacity=1`：
+当前准实时模式把 Service 限制为 `MinCapacity=1`、`MaxCapacity=1`：
 
-- 有可见消息时，扩容至 1；
-- 可见消息与处理中消息持续为空时，缩容至 0；
-- scale-in 需要连续空闲并保留 cooldown，避免数据库写入期间停止 Task。
+- 一个 Processor 常驻并使用 SQS 长轮询，消息到达后无需等待 CloudWatch 分钟级
+  指标和 Fargate 冷启动；
+- 页面标签页可见时，每 10 秒后台查询 PostgreSQL；
+- 刷新期间继续展示上一份成功数据，不会整页白屏。
 
-<Callout type="warn" title="自动伸缩增强的部署状态">
-  当前生产链路曾通过 reviewed Change Set 短时将 Processor 切到 1 完成真实验收，
-  验收后恢复为 0。队列驱动的自动伸缩策略属于后续增强，完成 Change Set、真实
-  浏览器首访与 SPA 跳转、自动启动和排空归零验证前，不应写成已云端验收。
+模板仍保留低成本模式。通过 reviewed Change Set 传 `DesiredCount=0` 时，
+`MinCapacity` 同步变为 0：有可见消息才扩容到 1，队列连续排空后缩回 0。
+
+<Callout type="warn" title="准实时改动的部署状态">
+  2026-07-27 的线上基线仍是 `DesiredCount=0`。当前分支的常驻 Processor 与
+  10 秒页面刷新完成本地实现后，仍需合并到 `master`、执行 reviewed Change Set
+  并发布 Web；完成真实浏览器验收前，不能写成已上线。
 </Callout>
 
 ### 清洗步骤
@@ -542,10 +548,10 @@ ECR 尚无镜像时 Service 反复启动失败。
    Change Set；权限模板未变化时不需要重复更新。
 3. 运行 `push-image`，镜像标签使用 `prod-<完整Git SHA>`。
 4. 运行 `create-runtime-change-set`，使用相同镜像标签和
-   `desired_count=0`。
+   `desired_count=1`。
 5. 审查 Changes、Parameters 和 Replacement：
    - 镜像标签必须是刚推送的不可变标签；
-   - `DesiredCount` 正常保持 0；
+   - 准实时模式的 `DesiredCount` 和 `MinCapacity` 都应为 1；
    - 不应替换 Queue、DLQ 或 ECR；
    - 不应出现 Performance Stack 之外的资源；
    - 涉及数据库、Queue 或 Service 替换时先停止，不执行。
@@ -665,11 +671,11 @@ Node Lambda 继续使用项目既有的 alias 灰度和回滚流程。
 
 ### AWS 成本边界
 
-当前低流量设计的主要成本来源：
+当前准实时设计的主要成本来源：
 
 | 服务 | 当前成本特征 |
 | --- | --- |
-| ECS Fargate | Processor 从 0 到 1 运行期间按 vCPU/内存秒计费，空闲为 0 时无常驻 Task 计算费 |
+| ECS Fargate | 准实时模式常驻一个 0.25 vCPU / 0.5 GiB Processor，按运行时长计费 |
 | SQS + DLQ | 按请求量计费，低流量通常很小 |
 | ECR | 按镜像存储量计费，生命周期策略负责清理旧镜像 |
 | CloudWatch Logs | 按写入和保留量计费，日志设置固定保留期 |
@@ -677,9 +683,9 @@ Node Lambda 继续使用项目既有的 alias 灰度和回滚流程。
 | PostgreSQL | 复用现有 RDS，不为 Performance 单独创建数据库实例 |
 | Lambda / API Gateway | 复用现有 Node 接入层，按请求量增加少量调用成本 |
 
-因此最需要避免的是把 Processor 长期固定为 `DesiredCount=1`。当前设计通过
-`MinCapacity=0`、`MaxCapacity=1` 控制上限，同时接受 Fargate 冷启动带来的分钟级
-可见延迟。
+这里明确用一个常驻 Processor 的费用换取十几秒内可见。若暂时不需要准实时体验，
+可以通过 reviewed Change Set 把 `DesiredCount` 改为 0；`MinCapacity` 会同步为
+0，恢复队列驱动的 0→1→0，代价是重新出现分钟级冷启动延迟。
 
 ## PostgreSQL 与统计页面
 
@@ -689,7 +695,8 @@ p50、p75 和 p95；多个批次的百分位数不能通过平均得到总体百
 
 `performance.overview` 单次返回五项 Web Vitals、错误率、页面访问量、匿名 session、
 处理延迟、趋势、route 对比、慢请求和错误分组。页面筛选使用 React Query
-`keepPreviousData` 保留上一份成功结果，后台更新时不会整页闪白。
+`keepPreviousData` 保留上一份成功结果，后台更新时不会整页闪白；标签页可见时
+每 10 秒自动查询，进入后台后暂停轮询，避免无效请求。
 
 CloudWatch Logs 只保存清洗过程和稳定诊断字段，不是页面加载时的在线查询数据源。
 
@@ -787,10 +794,10 @@ VITE_APP_RELEASE=local
 只修改环境和版本标签不会带来肉眼可见的页面样式变化，它们体现在新采集事件和筛选项
 中。Vite 环境变量在构建或开发服务启动时读取，修改 `.env` 后需要重新启动 Web。
 
-<Callout type="warn" title="202 不等于页面立即有数据">
-  `202 Accepted` 只证明浏览器到 SQS 的接收链路成功。如果生产 Processor 当前为
-  `DesiredCount=0` 且队列自动伸缩增强尚未部署，消息会留在 SQS，页面不会立即出现
-  新统计。必须等 Processor 实际消费并写入 PostgreSQL 后再刷新页面。
+<Callout type="warn" title="202 不等于已经完成统计">
+  `202 Accepted` 只证明浏览器到 SQS 的接收链路成功。准实时模式仍需等待常驻
+  Processor 清洗入库，以及页面下一次 10 秒轮询；正常目标是约 10–20 秒，不是
+  WebSocket 毫秒级推送。如果线上仍为 `DesiredCount=0`，则不会获得这一时效。
 </Callout>
 
 ## 代码导读
@@ -844,7 +851,8 @@ VITE_APP_RELEASE=local
 - `/performance` 回读真实 p75、错误数、访问量、处理延迟和 route 对比。
 - 新 migration 只创建独立 performance 表与索引；Token 管理和 AI Ops 原有读路径
   冒烟通过。
-- 验收结束后 Processor 恢复 `DesiredCount=0`，主队列和 DLQ 均无积压。
+- 2026-07-27 验收结束后 Processor 恢复 `DesiredCount=0`，主队列和 DLQ 均无
+  积压；这是历史基线，不代表当前准实时改动已经部署。
 
 已验证与待验证必须分开：
 
@@ -855,6 +863,7 @@ VITE_APP_RELEASE=local
 | 独立 migration 对原 Token 与 AI Ops 读路径的兼容性 | 已完成冒烟 |
 | SPA 路由访问补报 | 代码和本地构建完成，待生产真实浏览器验收 |
 | ECS 队列驱动 0→1→0 自动伸缩 | 模板验证完成，待 reviewed Change Set 云端验收 |
+| 常驻 Processor + 页面 10 秒轮询 | 本地实现与验证完成，待生产准实时验收 |
 | 当前分支新增的知识库和详细代码注释 | 本地完成，尚未随分支发布 |
 
 完整云端证据、workflow run 和保留项见

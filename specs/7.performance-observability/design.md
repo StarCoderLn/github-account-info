@@ -136,20 +136,24 @@ processor 使用 20 秒 SQS 长轮询，每次最多读取 10 条 batch 消息�
 
 ## ECS 按队列自动伸缩
 
-processor 仍是独立 ECS Service，但 Application Auto Scaling 将容量限制为
-`MinCapacity=0`、`MaxCapacity=1`：
+processor 仍是独立 ECS Service。当前准实时模式使用 `DesiredCount=1`，并让
+Application Auto Scaling 的 `MinCapacity` 引用同一参数、`MaxCapacity=1`，从而
+保证始终有一个已经启动的 processor 等待消息：
 
-1. `ApproximateNumberOfMessagesVisible >= 1` 持续一个 60 秒数据点时执行
+1. 准实时模式传 `DesiredCount=1`，processor 常驻，消息到达 SQS 后由长轮询立即
+   取得，不再等待 CloudWatch 一分钟指标和 Fargate 冷启动。
+2. 若以后通过 reviewed Change Set 传 `DesiredCount=0`，则恢复低成本模式：
+   `ApproximateNumberOfMessagesVisible >= 1` 持续一个 60 秒数据点时执行
    `ChangeInCapacity +1`。
-2. 可见消息与 `ApproximateNumberOfMessagesNotVisible` 之和小于 1，且连续三个
+3. 可见消息与 `ApproximateNumberOfMessagesNotVisible` 之和小于 1，且连续三个
    60 秒数据点成立时执行 `ChangeInCapacity -1`。
-3. scale-in 使用 180 秒 cooldown，消息仍在 visibility timeout 或数据库处理中
+4. scale-in 使用 180 秒 cooldown，消息仍在 visibility timeout 或数据库处理中
    时不会把 task 提前停掉。
 
-CloudWatch SQS 指标和 Fargate 冷启动决定这不是秒级实时链路；目标是在低流量时
-避免常驻费用，同时无需人工切换 DesiredCount。扩缩容策略只管理该 Service 的
-`ecs:service:DesiredCount`，最多启动一个 processor，不依据 Web Vitals 好坏扩容
-业务服务。
+浏览器 SDK 默认最多约 5 秒发送一批事件；常驻 processor 清洗入库后，
+`/performance` 在标签页可见时每 10 秒后台重新查询。它是约 10–20 秒可见的
+准实时链路，不是 WebSocket 流式推送。刷新期间保留上一份成功数据，不进入整页
+loading；标签页进入后台后暂停轮询，避免无效请求。
 
 ## PostgreSQL
 

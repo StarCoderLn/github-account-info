@@ -154,16 +154,18 @@ Feature 7 使用独立 stack `github-account-info-performance`。首次创建时
    `PERFORMANCE_PROCESSOR_MODE=migrate` 的短生命周期 Fargate Task，等待 exit code
    为 0 后结束；它复用 Task Definition 中的 Secret 和 RDS CA，不向 runner 暴露
    `DATABASE_URL`。
-8. 更新 stack 后保持 `DesiredCount=0`，审查 scalable target、queue scale-out/
-   scale-in policies 和两项 alarm；由 SQS backlog 自动启动最多一个 processor。
+8. 为准实时统计创建 `DesiredCount=1` 的 UPDATE Change Set；审查后执行。scalable
+   target 的 `MinCapacity` 会同步为 1，让一个 processor 常驻。若未来改回 0，
+   queue scale-out/scale-in policies 才负责按 backlog 在 0→1→0 之间伸缩。
 9. stack 成功后，Node 发布脚本自动读取 `PerformanceQueueUrl/Arn` 输出并传给
    server SAM stack；不存在 performance stack 时两项保持全空。
 10. Cloudflare Pages production 设置
    `VITE_PERFORMANCE_ENABLED=true`、`VITE_APP_ENVIRONMENT=production` 和不可变
    `VITE_APP_RELEASE`，再构建 web。
-11. 验收结束确认主队列可见与处理中消息均为 0，并观察连续 3 个数据点后 ECS
-    `desired/running` 自动回到 0；若自动缩容失败，先排查 scaling activity，
-    不直接运行 `aws ecs update-service`。
+11. 准实时验收时确认 ECS `desired/running=1/1`，真实浏览器事件能在约 10–20 秒
+    内完成入队、清洗、入库和页面回读。只有明确恢复低成本模式时才执行
+    `DesiredCount=0` 的 reviewed Change Set；不要直接运行
+    `aws ecs update-service`。
 
 浏览器始终只调用 `/api/v1/performance/events`，不接触 Queue URL 或 AWS 凭证。
 清洗日志位于 `/ecs/github-account-info-performance`。
