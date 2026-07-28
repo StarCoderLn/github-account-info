@@ -161,15 +161,17 @@ VITE_SERVER_URL
 3. 订阅 Router `onResolved`；
 4. 仅当存在 `fromLocation` 且 `pathChanged=true` 时记录 SPA 访问；
 5. SDK 尚未就绪的跳转暂存到最多 100 条的内存队列；
-6. query/hash 变化不计入新的页面访问。
+6. 首访、暂存路由重放和真实 SPA 跳转在入队后立即触发一次有界 `flush()`；
+7. query/hash 变化不计入新的页面访问。
 
 这样首访不会重复，SPA path 不会漏报，慢速设备也不会因为 SDK 延迟加载丢掉最近
-跳转。
+跳转。页面访问不等待可能被浏览器节流的 5 秒 interval；Web Vitals、错误和资源耗时
+仍按 SDK 的批量策略发送。
 
 生产验收时还发现一个容易误判的问题：Cloudflare Pages 可以成功构建出 SDK chunk，
 但这不等于浏览器已经执行了采集。验收必须继续观察事件入口、SQS 和 Processor 日志。
 如果线上页面能读取统计、SDK chunk 也返回 200，但新访问没有进入 SQS，应先检查
-SDK 启动调度，而不是重复修改 AWS 清洗链路。
+SDK 启动与 flush 调度，而不是重复修改 AWS 清洗链路。
 
 ### 第 5 步：新增精确 Hono 接收路由
 

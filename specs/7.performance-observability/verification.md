@@ -83,7 +83,11 @@ Reviewed Change Set 已把 Performance Processor 更新为常驻 1 个 Task。�
 继续做真实浏览器验收时发现，新访问仍未进入 Processor 日志。线上主包和动态 SDK
 chunk 均可访问，CORS 预检也返回 204，问题收敛到浏览器启动调度：
 `requestIdleCallback` 的 timeout 不是严格执行期限，页面可能一直未启动 SDK。
-当前分支已改为在首屏当前任务后用 0ms timer 启动动态 import；这项修复仍需合并并
+第一轮修复改为在首屏当前任务后用 0ms timer 启动 dynamic import，但重新部署后，
+受控后台标签页仍未在预期时间产生事件，说明周期 flush 的 interval 也可能被节流。
+
+当前分支进一步把首访、SDK 就绪前暂存路由和真实 SPA 跳转改为入队后立即调用有界
+`flush()`；Web Vitals、错误和资源耗时仍保持原来的批量策略。这项修复仍需合并并
 重新部署 Cloudflare 后完成最终端到端验收。
 
 ## 本地手动验收
