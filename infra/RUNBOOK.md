@@ -166,12 +166,15 @@ Agent role 不含 ECS/Lambda/CloudFormation/SQS 写操作。任何建议都只�
 链路为浏览器 → `POST /api/v1/performance/events` → Node Lambda → SQS → 独立 ECS
 processor → CloudWatch/PostgreSQL。排障按层进行：
 
-成本边界：processor 的 scalable target 为 `MinCapacity=0`、`MaxCapacity=1`。
-SQS 出现可见消息后 scale-out alarm 将 Service 从 0 扩到 1；可见与处理中消息之和
-连续 3 分钟为 0 后 scale-in alarm 恢复到 0。当前 production stack 在该 Change
-Set 部署前仍是手动 `DesiredCount=0`，不能把本地模板状态当成线上已生效。禁止
-直接 `aws ecs update-service`，否则会造成 CloudFormation/Application Auto
-Scaling 状态漂移。
+当前准实时模式通过 reviewed Change Set 使用 `DesiredCount=1`，scalable target
+的 `MinCapacity` 同步为 1、`MaxCapacity=1`，让 processor 常驻并通过 SQS 长轮询
+立即接收事件。浏览器 SDK 最多约 5 秒发送一批，统计页在前台每 10 秒后台回读，
+正常目标是约 10–20 秒可见。
+
+若以后通过 reviewed Change Set 改回 `DesiredCount=0`，`MinCapacity` 也会恢复为
+0：SQS 出现可见消息后 scale-out alarm 将 Service 从 0 扩到 1；可见与处理中消息
+之和连续 3 分钟为 0 后再恢复到 0。禁止直接 `aws ecs update-service`，否则会造成
+CloudFormation/Application Auto Scaling 状态漂移。
 
 1. 浏览器没有请求：确认 production 构建变量
    `VITE_PERFORMANCE_ENABLED=true`，且 SDK 在 idle 阶段初始化。

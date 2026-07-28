@@ -19,12 +19,12 @@ Parameters:
     AllowedPattern: "^prod-[0-9a-f]{7,40}$"
   DesiredCount:
     Type: Number
-    Default: 0
+    Default: 1
     MinValue: 0
     MaxValue: 1
     Description: >-
-      Deployment-time desired count. Keep zero for normal operation; service
-      auto scaling starts one task when the performance queue has work.
+      Runtime mode. Use one for the near-real-time dashboard so one processor
+      stays warm; zero retains the queue-driven low-cost mode.
   AlarmTopicArn:
     Type: String
     Default: ""
@@ -294,7 +294,10 @@ Resources:
     DependsOn: PerformanceService
     Properties:
       MaxCapacity: 1
-      MinCapacity: 0
+      # DesiredCount=1 keeps the processor warm for near-real-time statistics.
+      # A future reviewed deployment may set it to 0 to restore queue-driven
+      # scale-to-zero without changing the template.
+      MinCapacity: !Ref DesiredCount
       ResourceId: !Sub service/${FoundationProjectName}/${ProjectName}
       RoleARN: !Sub >-
         arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService

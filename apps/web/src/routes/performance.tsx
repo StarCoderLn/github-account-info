@@ -62,6 +62,10 @@ type Metric = Overview["metrics"][number];
 type MetricName = Metric["name"];
 type Range = "1h" | "24h" | "7d";
 
+// SDK 最多约 5 秒发送一批事件；清洗任务常驻时再以 10 秒轮询统计接口，
+// 正常情况下用户可在一次或两次轮询内看到刚产生的性能数据。
+const PERFORMANCE_REFRESH_INTERVAL_MS = 10_000;
+
 const METRIC_DESCRIPTIONS: Record<MetricName, string> = {
 	LCP: "最大内容绘制",
 	INP: "交互响应速度",
@@ -517,6 +521,9 @@ function PerformancePage() {
 		}),
 		// 筛选 key 改变时保留上一份成功数据，后台请求期间不卸载整页。
 		placeholderData: keepPreviousData,
+		// 页面可见时每 10 秒后台回读 PostgreSQL；切到后台标签页后暂停，避免无效请求。
+		refetchInterval: PERFORMANCE_REFRESH_INTERVAL_MS,
+		refetchIntervalInBackground: false,
 		meta: { suppressGlobalErrorToast: true },
 	});
 
@@ -598,7 +605,7 @@ function PerformancePage() {
 							</span>
 							<div>
 								<p className="font-medium">采集链路已接入</p>
-								<p className="text-blue-100">按需处理 · 数据保留 7 天</p>
+								<p className="text-blue-100">约 10 秒刷新 · 数据保留 7 天</p>
 							</div>
 						</div>
 					</div>
@@ -645,7 +652,7 @@ function PerformancePage() {
 						<div>
 							<p className="font-semibold">筛选数据视图</p>
 							<p className="text-blue-500 text-xs">
-								切换维度后自动刷新当前统计
+								切换维度立即更新，当前页面每 10 秒自动刷新
 							</p>
 						</div>
 						<p

@@ -14,7 +14,8 @@ for (const expected of [
 	"PerformanceTaskDefinition:",
 	"PerformanceService:",
 	"PerformanceScalableTarget:",
-	"MinCapacity: 0",
+	// 最小容量必须与运行参数同步：1 表示准实时常驻，0 表示可缩容到零。
+	"MinCapacity: !Ref DesiredCount",
 	"MaxCapacity: 1",
 	"PerformanceQueueBacklogAlarm:",
 	"PerformanceQueueDrainedAlarm:",

@@ -30,7 +30,7 @@
 闲置状态保持 `DesiredCount=0`，因此没有常驻 Fargate task 费用。Queue、ECR、
 CloudWatch Logs 和 alarms 等按各自用量或保留量计费。
 
-## 本地待部署优化
+## 已验收基线
 
 2026-07-27 线上访问未增加统计时完成只读诊断：
 
@@ -40,7 +40,7 @@ CloudWatch Logs 和 alarms 等按各自用量或保留量计费。
 - 根因边界包括两项：旧版只在 monitor `start()` 时记录首次加载，不记录
   TanStack Router SPA path 切换；processor 为 0 时即使消息入队也不会自动清洗。
 
-当前分支已完成但尚未部署：
+当时分支已完成并作为低成本自动伸缩方案保留：
 
 1. Web 入口记录初始 URL，并在 Router `onResolved` 后记录真实 path 切换。
 2. SDK 支持显式 route 的 `trackPageView(route)`，删除 query/fragment；延迟加载
@@ -51,8 +51,21 @@ CloudWatch Logs 和 alarms 等按各自用量或保留量计费。
 4. SDK 专项测试、SDK/Web 类型检查、Web production build、全套 infra boundary
    和两份 CloudFormation `validate-template` 均通过。
 
-这些记录只代表代码侧和部署准备完成。T-708 在 reviewed Change Set、Cloudflare
-production deployment 和真实 0→1→0 链路验收完成前保持未完成。
+以上是 2026-07-27 的历史验收基线，不代表当前准实时改动已经部署。
+
+## 准实时改动（待部署）
+
+2026-07-28 根据“十几秒内看到统计”的体验目标完成代码调整：
+
+1. `/performance` 在标签页可见时每 10 秒后台回读，刷新和筛选期间保留旧数据，
+   不进入整页 loading。
+2. runtime Change Set 默认 `DesiredCount=1`；scalable target 的 `MinCapacity`
+   引用同一参数，使 processor 保持常驻。
+3. 首次 CREATE 必须使用 0 的安全门仍然保留，避免 ECR 尚无镜像时启动 Service。
+4. 传回 `DesiredCount=0` 时仍可恢复原来的 queue-driven 0→1→0 低成本模式。
+
+这些记录只代表本地实现与部署准备；T-709 在代码合并到 `master`、reviewed Change
+Set 执行以及真实浏览器链路验收完成前保持未完成。
 
 ## 本地手动验收
 
@@ -181,5 +194,6 @@ AWS root 凭证只用于 `describe-*` / `get-*` / `list-*` 只读核对。
 
 - 未做真实暂时性数据库故障和 DLQ redrive 演练。该演练会影响共享 RDS 或故意制造
   重试积压，不属于本次低风险验收范围。
-- 生产低流量阶段继续保持 `DesiredCount=0`。需要观察真实 RUM 数据时，按运行手册
-  通过 reviewed Change Set 短时切到 1，消费完成后恢复为 0。
+- 2026-07-27 的线上基线仍是 `DesiredCount=0`。准实时改动必须合并到 `master`
+  后再通过 reviewed Change Set 切到 1；在云端验收完成前不能把本地模板状态写成
+  已上线。
