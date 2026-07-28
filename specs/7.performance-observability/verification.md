@@ -67,6 +67,25 @@ CloudWatch Logs 和 alarms 等按各自用量或保留量计费。
 这些记录只代表本地实现与部署准备；T-709 在代码合并到 `master`、reviewed Change
 Set 执行以及真实浏览器链路验收完成前保持未完成。
 
+### 2026-07-28 生产准实时链路诊断
+
+Reviewed Change Set 已把 Performance Processor 更新为常驻 1 个 Task。部署后确认：
+
+1. Performance stack 为 `UPDATE_COMPLETE`，ECS 为
+   `desired=1 / running=1 / pending=0`。
+2. scalable target 为 `MinCapacity=1 / MaxCapacity=1`。
+3. 原有 13 条 SQS 积压已清空，DLQ 保持 0；Processor 日志显示事件成功写入数据库。
+4. 统计页从 2 次访问更新到 8 次，并出现 `/ops` 与 `/performance` 路由。
+5. Cloudflare 生产变量已校正为
+   `VITE_PERFORMANCE_ENABLED=true`、`VITE_APP_ENVIRONMENT=production` 和
+   `VITE_APP_RELEASE=c095a74`。
+
+继续做真实浏览器验收时发现，新访问仍未进入 Processor 日志。线上主包和动态 SDK
+chunk 均可访问，CORS 预检也返回 204，问题收敛到浏览器启动调度：
+`requestIdleCallback` 的 timeout 不是严格执行期限，页面可能一直未启动 SDK。
+当前分支已改为在首屏当前任务后用 0ms timer 启动动态 import；这项修复仍需合并并
+重新部署 Cloudflare 后完成最终端到端验收。
+
 ## 本地手动验收
 
 ### 页面与交互

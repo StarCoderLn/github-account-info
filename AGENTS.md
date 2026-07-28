@@ -131,3 +131,7 @@ Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
   只能保证事件入队，`DesiredCount=0` 的 ECS 仍会等待 CloudWatch 指标与冷启动，
   页面不轮询也不会自动看到新数据。准实时模式应保持一个 processor 常驻，并在页面
   可见时用 React Query 定时后台刷新；进入后台标签页后暂停轮询，避免无效请求。
+- [F7-L17] `requestIdleCallback({ timeout })` 的 timeout 不是严格执行期限；后台
+  标签页、持续繁忙页面或更激进的浏览器节流可能让 SDK 长时间不启动。性能采集可以
+  用动态 import 拆包，但启动门槛应放在当前渲染任务后的普通 timer 中。生产验收不能
+  只确认 chunk 返回 200，还要继续确认事件入口、SQS 和 Processor 日志出现新事件。

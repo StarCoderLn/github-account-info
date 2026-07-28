@@ -50,12 +50,18 @@ export function startPerformanceMonitoring(): PerformanceMonitoring {
 			});
 	};
 
-	// 优先等浏览器空闲再下载监控 chunk；timeout 保证繁忙页面最终也会启动采集。
-	if ("requestIdleCallback" in window) {
-		window.requestIdleCallback(start, { timeout: 2_000 });
-	} else {
-		globalThis.setTimeout(start, 0);
-	}
+	/**
+	 * 把动态 import 放到当前渲染任务之后执行，但不能依赖 requestIdleCallback。
+	 *
+	 * requestIdleCallback 的 timeout 只表示“超过该时间后有机会时尽快执行”，并非
+	 * 严格定时器。浏览器处于后台、主线程持续繁忙或采用更激进的节流策略时，回调
+	 * 可能长时间不运行，最终表现为页面正常、SDK chunk 也存在，但首访和 SPA 跳转
+	 * 始终没有上报。
+	 *
+	 * 0ms timer 同样不会阻塞 React 当前的首屏 render；回调中仍然是异步 dynamic
+	 * import，因此只消除了不可靠的“等待空闲”门槛，没有把 SDK 合并回首屏主包。
+	 */
+	globalThis.setTimeout(start, 0);
 
 	return {
 		trackPageView(route) {
