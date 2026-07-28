@@ -12,6 +12,8 @@ on:
           - execute-policy-change-set
           - create-runtime-change-sets
           - execute-runtime-pause
+          - recover-performance-rollback
+          - finish-runtime-pause
       source_run_id:
         description: Run ID that created the reviewed change sets
         required: false
@@ -163,16 +165,13 @@ jobs:
           echo "Review all three Change Sets before executing the pause phase." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Execute reviewed runtime pause
-        if: inputs.operation == 'execute-runtime-pause'
+        if: inputs.operation == 'execute-runtime-pause' || inputs.operation == 'finish-runtime-pause'
         shell: bash
         env:
           SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          OPERATION: ${{ inputs.operation }}
         run: |
           set -euo pipefail
-          if [[ ! "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]; then
-            echo "source_run_id must be the numeric create-runtime run ID" >&2
-            exit 1
-          fi
 
           execute_update() {
             local stack_name="$1"
@@ -187,18 +186,24 @@ jobs:
             aws cloudformation wait stack-update-complete --stack-name "$stack_name"
           }
 
-          execute_update \
-            github-account-info-go-production \
-            "pause-production-${SOURCE_RUN_ID}"
-          execute_update \
-            github-account-info-performance \
-            "pause-performance-${SOURCE_RUN_ID}"
-          if aws cloudformation describe-change-set \
-            --stack-name github-account-info-go-pr-27 \
-            --change-set-name "pause-preview-${SOURCE_RUN_ID}" >/dev/null 2>&1; then
+          if [[ "$OPERATION" == "execute-runtime-pause" ]]; then
+            if [[ ! "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]; then
+              echo "source_run_id must be the numeric create-runtime run ID" >&2
+              exit 1
+            fi
             execute_update \
-              github-account-info-go-pr-27 \
-              "pause-preview-${SOURCE_RUN_ID}"
+              github-account-info-go-production \
+              "pause-production-${SOURCE_RUN_ID}"
+            execute_update \
+              github-account-info-performance \
+              "pause-performance-${SOURCE_RUN_ID}"
+            if aws cloudformation describe-change-set \
+              --stack-name github-account-info-go-pr-27 \
+              --change-set-name "pause-preview-${SOURCE_RUN_ID}" >/dev/null 2>&1; then
+              execute_update \
+                github-account-info-go-pr-27 \
+                "pause-preview-${SOURCE_RUN_ID}"
+            fi
           fi
 
           aws cloudwatch disable-alarm-actions \
@@ -262,3 +267,38 @@ jobs:
               github-account-info-go-pr-27 \
             --query 'services[].{Name:serviceName,Desired:desiredCount,Running:runningCount}'
           echo "Runtime pause completed." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Recover Performance Stack rollback
+        if: inputs.operation == 'recover-performance-rollback'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stack_name="github-account-info-performance"
+          stack_status="$(aws cloudformation describe-stacks \
+            --stack-name "$stack_name" \
+            --query 'Stacks[0].StackStatus' \
+            --output text)"
+          if [[ "$stack_status" == "UPDATE_ROLLBACK_FAILED" ]]; then
+            aws cloudformation continue-update-rollback --stack-name "$stack_name"
+          elif [[ "$stack_status" != "UPDATE_ROLLBACK_COMPLETE" ]]; then
+            echo "Unexpected stack state: $stack_status" >&2
+            exit 1
+          fi
+          for attempt in {1..40}; do
+            stack_status="$(aws cloudformation describe-stacks \
+              --stack-name "$stack_name" \
+              --query 'Stacks[0].StackStatus' \
+              --output text)"
+            if [[ "$stack_status" == "UPDATE_ROLLBACK_COMPLETE" ]]; then
+              exit 0
+            fi
+            if [[ "$stack_status" == *"_FAILED" ]]; then
+              echo "Rollback recovery failed: $stack_status" >&2
+              exit 1
+            fi
+            if [[ "$attempt" -eq 40 ]]; then
+              echo "Rollback recovery timed out: $stack_status" >&2
+              exit 1
+            fi
+            sleep 15
+          done
