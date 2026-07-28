@@ -60,17 +60,13 @@ export function startPerformanceMonitoring(): PerformanceMonitoring {
 	};
 
 	/**
-	 * 把动态 import 放到当前渲染任务之后执行，但不能依赖 requestIdleCallback。
+	 * 直接发起 dynamic import，不再在外层增加 idle callback 或 timer。
 	 *
-	 * requestIdleCallback 的 timeout 只表示“超过该时间后有机会时尽快执行”，并非
-	 * 严格定时器。浏览器处于后台、主线程持续繁忙或采用更激进的节流策略时，回调
-	 * 可能长时间不运行，最终表现为页面正常、SDK chunk 也存在，但首访和 SPA 跳转
-	 * 始终没有上报。
-	 *
-	 * 0ms timer 同样不会阻塞 React 当前的首屏 render；回调中仍然是异步 dynamic
-	 * import，因此只消除了不可靠的“等待空闲”门槛，没有把 SDK 合并回首屏主包。
+	 * import() 本身异步返回 Promise，SDK 也仍是独立 chunk，因此不会把监控依赖
+	 * 合并进首屏主包；额外调度反而会给浏览器留下延迟甚至节流启动的机会。调用后
+	 * 立即返回轻量代理，加载期间发生的 SPA 跳转继续由 pendingRoutes 有界暂存。
 	 */
-	globalThis.setTimeout(start, 0);
+	start();
 
 	return {
 		trackPageView(route) {

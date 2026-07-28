@@ -170,6 +170,8 @@ VITE_SERVER_URL
 
 生产验收时还发现一个容易误判的问题：Cloudflare Pages 可以成功构建出 SDK chunk，
 但这不等于浏览器已经执行了采集。验收必须继续观察事件入口、SQS 和 Processor 日志。
+SDK 使用 dynamic import 保持独立分包，但直接发起 import，不再套
+`requestIdleCallback` 或 `setTimeout`；后两者都可能在后台或受控浏览器中被延迟。
 如果线上页面能读取统计、SDK chunk 也返回 200，但新访问没有进入 SQS，应先检查
 SDK 启动与 flush 调度，而不是重复修改 AWS 清洗链路。
 

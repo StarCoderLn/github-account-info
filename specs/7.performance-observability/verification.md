@@ -86,9 +86,13 @@ chunk 均可访问，CORS 预检也返回 204，问题收敛到浏览器启动�
 第一轮修复改为在首屏当前任务后用 0ms timer 启动 dynamic import，但重新部署后，
 受控后台标签页仍未在预期时间产生事件，说明周期 flush 的 interval 也可能被节流。
 
-当前分支进一步把首访、SDK 就绪前暂存路由和真实 SPA 跳转改为入队后立即调用有界
-`flush()`；Web Vitals、错误和资源耗时仍保持原来的批量策略。这项修复仍需合并并
-重新部署 Cloudflare 后完成最终端到端验收。
+第二轮修复把首访、SDK 就绪前暂存路由和真实 SPA 跳转改为入队后立即调用有界
+`flush()`；线上包已包含该逻辑，但受控浏览器访问仍未出现在 API Gateway 日志中。
+进一步检查确认外层仍存在 `setTimeout(0)` 调度。
+
+当前分支直接发起异步 dynamic import，不再依赖 idle callback 或 timer；独立分包、
+暂存路由和立即 flush 均保留。这项修复仍需重新部署 Cloudflare 后完成最终端到端
+验收。
 
 ## 本地手动验收
 

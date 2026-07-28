@@ -132,9 +132,10 @@ Feature 5 的云端验收结果和保留的 DLQ 故障注入状态位于
   页面不轮询也不会自动看到新数据。准实时模式应保持一个 processor 常驻，并在页面
   可见时用 React Query 定时后台刷新；进入后台标签页后暂停轮询，避免无效请求。
 - [F7-L17] `requestIdleCallback({ timeout })` 的 timeout 不是严格执行期限；后台
-  标签页、持续繁忙页面或更激进的浏览器节流可能让 SDK 长时间不启动。性能采集可以
-  用动态 import 拆包，但启动门槛应放在当前渲染任务后的普通 timer 中。生产验收不能
-  只确认 chunk 返回 200，还要继续确认事件入口、SQS 和 Processor 日志出现新事件。
+  标签页、持续繁忙页面或更激进的浏览器节流可能让 SDK 长时间不启动，普通 timer
+  在受控环境中也可能被延迟。性能采集可以用 dynamic import 拆包并直接发起异步
+  加载，无需再套 idle callback 或 timer。生产验收不能只确认 chunk 返回 200，还要
+  继续确认事件入口、SQS 和 Processor 日志出现新事件。
 - [F7-L18] 页面访问量若承诺十几秒可见，不能只靠 SDK 的周期 interval 发送；后台
   标签页可能节流 timer。首访和真实 SPA path change 应在入队后立即触发有界 flush，
   同时保留 SDK 的批量上限、一次失败回填和静默降级；Web Vitals、错误与资源耗时仍
