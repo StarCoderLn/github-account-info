@@ -15,6 +15,7 @@ on:
           - recover-performance-rollback
           - finish-runtime-pause
           - restore-production
+          - remove-pause-policy
       source_run_id:
         description: Run ID that created the reviewed change sets
         required: false
@@ -340,3 +341,14 @@ jobs:
             --cluster github-account-info-go \
             --services github-account-info-go-production \
             --query 'services[0].{Name:serviceName,Desired:desiredCount,Running:runningCount,Pending:pendingCount}'
+
+      - name: Remove temporary pause policy
+        if: inputs.operation == 'remove-pause-policy'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stack_name="github-account-info-operations-pause-policy"
+          if aws cloudformation describe-stacks --stack-name "$stack_name" >/dev/null 2>&1; then
+            aws cloudformation delete-stack --stack-name "$stack_name"
+            aws cloudformation wait stack-delete-complete --stack-name "$stack_name"
+          fi
