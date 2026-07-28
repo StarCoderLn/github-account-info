@@ -125,7 +125,8 @@ jobs:
               --change-set-name "$change_set_name" \
               --change-set-type UPDATE \
               "$template_argument" \
-              --parameters "file://${output_file}"
+              --parameters "file://${output_file}" \
+              --capabilities CAPABILITY_NAMED_IAM
             aws cloudformation wait change-set-create-complete \
               --stack-name "$stack_name" \
               --change-set-name "$change_set_name"
