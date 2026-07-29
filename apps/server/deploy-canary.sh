@@ -6,6 +6,7 @@ set -euo pipefail
 
 readonly FUNCTION_NAME="github-account-info-api"
 readonly ALIAS_NAME="live"
+readonly STACK_NAME="github-account-info"
 readonly API_BASE_URL="${PUBLIC_API_BASE_URL:-}"
 readonly CORS_ORIGIN="${CORS_ORIGIN:-}"
 
@@ -142,10 +143,49 @@ parameter_overrides=(
   "LambdaSecurityGroupIds=$LAMBDA_SECURITY_GROUP_IDS"
 )
 
+smoke_once() {
+  local path="$1"
+  local attempt
+
+  for attempt in {1..3}; do
+    # 只验证公开入口，不直接调用 Lambda；这样同时覆盖 API Gateway integration
+    # 是否仍指向 live alias。短暂网络抖动允许三次尝试，持续失败才回滚。
+    if curl \
+      --fail \
+      --silent \
+      --show-error \
+      --max-time 10 \
+      "${API_BASE_URL}${path}" >/dev/null; then
+      return 0
+    fi
+    echo "Lambda canary probe ${path} failed (${attempt}/3)" >&2
+    sleep 2
+  done
+
+  return 1
+}
+
+sam_output_file="$(mktemp)"
+cleanup_sam_output() {
+  rm -f "$sam_output_file"
+}
+trap cleanup_sam_output EXIT
+
 sam deploy \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset \
-  --parameter-overrides "${parameter_overrides[@]}"
+  --parameter-overrides "${parameter_overrides[@]}" \
+  2>&1 | tee "$sam_output_file"
+
+# 基础设施/文档改动也可能触发 workflow。SAM 明确确认 Stack 无变化时，$LATEST
+# 没有可发布的新代码或配置；保留现有 live alias，验证公开入口后成功结束。
+if grep -Fq "No changes to deploy. Stack ${STACK_NAME} is up to date" "$sam_output_file"; then
+  smoke_once /
+  smoke_once /healthz
+  smoke_once /readyz
+  echo "Lambda deployment is already up to date; live alias unchanged"
+  exit 0
+fi
 
 aws lambda wait function-updated-v2 \
   --region "$AWS_DEFAULT_REGION" \
@@ -174,28 +214,6 @@ clear_routing_and_point_to() {
     --name "$ALIAS_NAME" \
     --function-version "$version" \
     --routing-config '{"AdditionalVersionWeights":{}}' >/dev/null
-}
-
-smoke_once() {
-  local path="$1"
-  local attempt
-
-  for attempt in {1..3}; do
-    # 只验证公开入口，不直接调用 Lambda；这样同时覆盖 API Gateway integration
-    # 是否仍指向 live alias。短暂网络抖动允许三次尝试，持续失败才回滚。
-    if curl \
-      --fail \
-      --silent \
-      --show-error \
-      --max-time 10 \
-      "${API_BASE_URL}${path}" >/dev/null; then
-      return 0
-    fi
-    echo "Lambda canary probe ${path} failed (${attempt}/3)" >&2
-    sleep 2
-  done
-
-  return 1
 }
 
 observe_canary() {
