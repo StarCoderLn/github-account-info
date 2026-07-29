@@ -1,0 +1,26 @@
+[
+  {
+    "ParameterKey": "ProjectName",
+    "ParameterValue": "github-account-info"
+  },
+  {
+    "ParameterKey": "CreateNatGateway",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "CreateDatabase",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "DBSnapshotIdentifier",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "DatabaseDeletionProtection",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "CreateSsmBastion",
+    "ParameterValue": "false"
+  }
+]

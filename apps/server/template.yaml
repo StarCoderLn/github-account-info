@@ -96,12 +96,10 @@ Parameters:
     AllowedPattern: "^$|^arn:(aws|aws-us-gov|aws-cn):sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$"
   LambdaSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-    Default: subnet-0271ef8002e00346a
-    Description: Existing private subnet IDs used by the Node Lambda.
+    Description: Target-account private subnet IDs used by the Node Lambda.
   LambdaSecurityGroupIds:
     Type: List<AWS::EC2::SecurityGroup::Id>
-    Default: sg-0f1137c6844a4c9fb
-    Description: Existing security group IDs used by the Node Lambda.
+    Description: Target-account security group IDs used by the Node Lambda.
   AlarmTopicArn:
     Type: String
     Default: ""

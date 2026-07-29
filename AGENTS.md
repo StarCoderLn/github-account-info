@@ -28,6 +28,11 @@
 - [F4-L01] SSM 隧道下的 Node PostgreSQL TLS 坑：`pg@8`/当前 `pg-connection-string` 会把 `sslmode=require` 按 `verify-full` 处理，而隧道地址 `127.0.0.1` 无法匹配 RDS 证书主机名。仅本机 SSM port-forward migration 使用 `sslmode=require&uselibpqcompat=true`；production Go Task 直连真实 RDS hostname 时仍使用 `verify-full`。
 - [F4-L02] CloudFormation 控制面权限不等于底层资源权限：`AWSCloudFormationFullAccess` 只允许操作 Stack/Change Set，不自动授予 `logs:ListTagsForResource`、`logs:CreateLogDelivery` 或 `cloudwatch:PutMetricAlarm`。部署失败应从 Events 中最早的具体 `*_FAILED` 找根因；`Resource update cancelled` 通常只是连带结果。
 - [F4-L03] 紧急 inline policy 只能用于恢复：最终权限事实来源必须迁回 IaC 管理的 customer managed policy，并按“先附加并验收、后删除 inline”处理，避免权限空窗；禁止用 `CloudWatchFullAccess` 掩盖精确权限缺口。
+- [F4-L04] 跨 AWS 账号迁移必须先完整读取 `infra/AWS_ACCOUNT_MIGRATION.md`，按
+  “源账号可恢复备份 → 目标账号重建 → 数据与异步链路验收 → Cloudflare 切流 →
+  用户批准后清理源账号”的阶段门执行。网络/RDS/可选堡垒机由
+  `infra/aws-network-database.yaml` 创建，物理 ID必须从 Stack Outputs 生成；
+  禁止 AI 编造 ID或在 `TARGET_ACCEPTED=true` 前删除源资源。
 
 Feature 4 的完整 AWS/Cloudflare 实测证据位于
 `specs/4.go-profile-platform/verification.md`；本节只保留可复用的工程教训。

@@ -65,10 +65,10 @@ for (const fragment of [
 	"IncidentTableArn",
 	"InvestigationQueueUrl",
 	"InvestigationQueueArn",
-	'AiOpsIncidentTableName="$ai_ops_incident_table"',
-	'AiOpsIncidentTableArn="$ai_ops_incident_table_arn"',
-	'AiOpsQueueUrl="$ai_ops_queue_url"',
-	'AiOpsQueueArn="$ai_ops_queue_arn"',
+	'"AiOpsIncidentTableName=$ai_ops_incident_table"',
+	'"AiOpsIncidentTableArn=$ai_ops_incident_table_arn"',
+	'"AiOpsQueueUrl=$ai_ops_queue_url"',
+	'"AiOpsQueueArn=$ai_ops_queue_arn"',
 ]) {
 	if (!nodeDeploy.includes(fragment)) {
 		throw new Error(`Node deploy is missing AI Ops stack wiring: ${fragment}`);

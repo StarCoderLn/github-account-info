@@ -519,7 +519,7 @@ jobs:
       - name: Configure AWS credentials     # ⑥ ★ OIDC 换取短期 AWS 凭证，全程无长期密钥
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::879980498268:role/github-actions-deployer
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-2
 
       - uses: aws-actions/setup-sam@v3      # ⑦ 装 SAM CLI
@@ -528,6 +528,10 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.AWS_DATABASE_URL }}
           PROFILE_EVENTS_TOPIC_ARN: ${{ vars.PROFILE_EVENTS_TOPIC_ARN }}
+          PUBLIC_API_BASE_URL: ${{ vars.PUBLIC_API_BASE_URL }}
+          CORS_ORIGIN: ${{ vars.CORS_ORIGIN }}
+          LAMBDA_SUBNET_IDS: ${{ vars.AWS_LAMBDA_SUBNET_IDS }}
+          LAMBDA_SECURITY_GROUP_IDS: ${{ vars.AWS_LAMBDA_SECURITY_GROUP_IDS }}
         run: |
           chmod +x deploy-canary.sh
           ./deploy-canary.sh
