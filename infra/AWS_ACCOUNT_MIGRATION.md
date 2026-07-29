@@ -107,6 +107,30 @@ TARGET_GITHUB_CONNECTION_ARN=
 - 在隔离数据库完成恢复演练；
 - 记录 schema、关键表行数和 migration journal 结果。
 
+仓库提供可重复执行的账号外加密备份：
+
+```bash
+SOURCE_AWS_ACCOUNT_ID=<source-account-id> \
+corepack pnpm migration:backup-aws-data
+```
+
+脚本通过 SSM 隧道读取 production/preview Secrets，使用官方 `pg_dump` custom
+format 导出两个数据库，同时导出项目 DynamoDB 表和非敏感 AWS/GitHub 清单。明文
+只存在于临时目录；最终归档写入被 Git 忽略的 `.local-backups/`，使用
+AES-256-CBC/PBKDF2 加密，随机密钥存入 macOS Keychain。Secret value、数据库密码
+和 dump 不进入 Git 或终端输出。
+
+解密与逐文件 SHA-256 校验：
+
+```bash
+corepack pnpm migration:restore-backup -- \
+  .local-backups/<backup-id>.tar.gz.enc
+```
+
+归档和 Keychain 密钥必须都保留。归档还必须复制到另一个可信的加密存储位置；只留在
+当前电脑不算完整灾备。换电脑前应通过受控密码管理流程迁移对应 Keychain 项，禁止把
+密钥写进仓库、迁移文档或聊天。
+
 **方案 B：跨账号 RDS snapshot**
 
 - 创建 manual snapshot；
@@ -117,9 +141,35 @@ TARGET_GITHUB_CONNECTION_ARN=
 
 只有目标账号可用的 snapshot copy，或验证过的逻辑备份，才算通过备份门。
 
-### 4.3 其他数据
+### 4.3 当前已验证的账号外备份
 
-- DynamoDB incident 历史需要保留时，使用 Export to S3 后在目标账号 Import。
+2026-07-30 已生成并完成解密/校验演练：
+
+```text
+BACKUP_ID=github-account-info-879980498268-2026-07-29T17-14-36-760Z
+SOURCE_ACCOUNT_ID=879980498268
+ARCHIVE_SHA256=8e95cb81b641be8480449b8fac4372e1bfe46b58360784e2472e1d79e59a5ab9
+KEYCHAIN_SERVICE=github-account-info-aws-migration-backup
+POSTGRES_PRODUCTION=pg_restore --list verified
+POSTGRES_PREVIEW=pg_restore --list verified
+DYNAMODB_AI_OPS_ITEMS=8
+PLAINTEXT_VERIFICATION_COPY=deleted
+```
+
+该记录证明备份在创建时可解密、结构可读；迁移当天仍需重新生成最新备份，不能把本次
+归档当作持续同步。
+
+### 4.4 其他数据
+
+- 当前加密归档包含 DynamoDB AttributeValue JSON。目标 Stack 创建表后运行：
+
+  ```bash
+  TARGET_AWS_ACCOUNT_ID=<target-account-id> \
+  corepack pnpm migration:restore-dynamodb -- \
+    <restored-backup>/dynamodb/github-account-info-ai-ops-incidents/items.json \
+    github-account-info-ai-ops-incidents
+  ```
+
 - ECR 镜像从固定 Git commit 重建，不依赖复制旧账号镜像。
 - CloudWatch Logs、Synthetics artifacts、SQS 在途消息默认不迁移；如需保留必须
   单独立项。
@@ -216,6 +266,24 @@ github-account-info/ai-ops/github-models-token
 ```
 
 production 和 preview 必须使用不同 database/user 权限边界。不能复制旧 ARN。
+
+开启目标 SSM 隧道后，把已解密的 custom-format dump 恢复到目标 Secret 指向的空
+数据库。脚本校验当前 AWS identity 必须属于目标账号，密码只从目标
+Secrets Manager 进入 `PGPASSWORD`：
+
+```bash
+TARGET_AWS_ACCOUNT_ID=<target-account-id> corepack pnpm db:tunnel
+
+TARGET_AWS_ACCOUNT_ID=<target-account-id> \
+corepack pnpm migration:restore-postgres -- \
+  <restored-backup>/postgres/production.dump \
+  github-account-info/production/database-url
+
+TARGET_AWS_ACCOUNT_ID=<target-account-id> \
+corepack pnpm migration:restore-postgres -- \
+  <restored-backup>/postgres/preview.dump \
+  github-account-info/preview/database-url
+```
 
 Secrets 与两个 Foundation Stack 就绪后生成下游参数：
 
