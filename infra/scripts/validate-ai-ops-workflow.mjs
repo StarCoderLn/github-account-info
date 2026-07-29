@@ -8,7 +8,9 @@ const workflow = readFileSync(
 for (const fragment of [
 	"workflow_dispatch:",
 	"id-token: write",
-	"assumed-role/github-actions-deployer/",
+	"vars.AWS_DEPLOY_ROLE_ARN",
+	'expected_role_name="${EXPECTED_DEPLOY_ROLE_ARN##*/}"',
+	":assumed-role/${expected_role_name}/",
 	"create-policy-change-set",
 	"execute-policy-change-set",
 	"create-model-secret",

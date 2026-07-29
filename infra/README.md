@@ -6,6 +6,10 @@
 
 ## 文件边界
 
+- `aws-account-foundation.yaml`：账号级 GitHub OIDC Provider 与只信任本仓库
+  `master` 的部署 Role；新账号首先创建，支持复用已有 GitHub OIDC Provider。
+- `aws-network-database.yaml`：可移植 VPC、双 AZ 私有子网、可选 NAT、使用
+  customer managed KMS key 的 RDS，以及可选零入站 SSM 堡垒机。
 - `go-foundation.yaml`：共享且低频变化的 ECR、ECS Cluster、Cloud Map、Internal ALB、Security Groups 和 CloudWatch Log Group。
 - `go-iam.yaml`：production/preview 的 ECS Execution Role 与 CodeBuild Role，共四个隔离 IAM Role；依赖 foundation exports。
 - `go-production.yaml`：稳定/Canary Task Definition、双 ECS Service、主/备用 Target Group 与加权 ALB path rule；只接受不可变的 `prod-<commit-sha>` image tag。
@@ -21,10 +25,59 @@
 - `server-deployer-policy.yaml`：绑定现有 `github-actions-deployer` 的 customer managed policy；只管理 Node/SAM 的 observability 资源，不创建或替换 OIDC Role。
 - `buildspec/go-production.yml`：格式、依赖、静态检查、测试、镜像构建/推送、production 部署与 smoke-test 回滚。
 - `RUNBOOK.md`：CloudWatch 告警、API/ALB/ECS/Cloud Map 分层排障、production 回滚和 PR 清理审计。
+- `AWS_ACCOUNT_MIGRATION.md`：跨账号重建、数据迁移、Cloudflare 切流、回滚和
+  旧账号清理的完整执行契约。
 
 共享栈不会启动 Fargate Task，也不会修改 API Gateway。Internal ALB 创建后默认只返回受控 404，直到阶段 6 添加 production Listener Rule。
 
 `go-production.yaml` 的公网 ALB 链路使用稳定/Canary 两个 ECS Service 和 Target Group 权重实现 10%/5 分钟 Canary。稳定 Service 保留 Cloud Map；Canary Service 不注册 Cloud Map，平时 `DesiredCount=0`。production rule 只转发 `/api/v1/*`、`/healthz` 和 `/readyz`，不会为 `/internal/*` 建立 ALB route。Lambda 的内部生成调用始终通过 Cloud Map DNS 访问稳定 Service。
+
+## AWS 账号部署身份
+
+新账号先使用管理员身份审查并创建 `aws-account-foundation.yaml`。这是 GitHub OIDC
+可用前唯一需要账号管理员创建的项目 Stack；之后日常 workflow 只使用其
+`DeploymentRoleArn` Output，不使用 root 或长期 Access Key：
+
+```bash
+aws cloudformation create-change-set \
+  --region us-east-2 \
+  --stack-name github-account-info-aws-account-foundation \
+  --change-set-name account-foundation-review \
+  --change-set-type CREATE \
+  --template-body file://infra/aws-account-foundation.yaml \
+  --parameters file://infra/parameters/aws-account-foundation.example.json \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+账号已有 `token.actions.githubusercontent.com` Provider 时，在参数文件填写
+`ExistingGitHubOidcProviderArn`；否则保留空字符串由 Stack 创建。Change Set
+必须只包含一个部署 Role，以及零个或一个 OIDC Provider。执行后把
+`DeploymentRoleArn` Output 设置为 GitHub Repository Variable：
+
+```text
+AWS_DEPLOY_ROLE_ARN
+```
+
+三个 GitHub workflow 都从该变量读取 Role ARN，并校验实际 `assumed-role`
+identity。完整迁移顺序见 [`AWS_ACCOUNT_MIGRATION.md`](./AWS_ACCOUNT_MIGRATION.md)。
+
+目标账号接着创建 `aws-network-database.yaml`。在线模式必须保留 NAT；仅准备
+snapshot/KMS、暂不运行 Lambda/ECS/SSM 的 dormant 环境才可以关闭。新建数据库时
+Secrets Manager 自动生成管理员凭证；应用使用的完整 production/preview
+`DATABASE_URL` Secrets 仍需在 endpoint 确定后创建。
+
+两个 Foundation Stack 和应用 Secrets 就绪后，使用目标账号身份生成下游参数：
+
+```bash
+TARGET_AWS_ACCOUNT_ID=<12-digit-target-account> \
+PRODUCTION_DATABASE_SECRET_ARN=<target-production-secret-arn> \
+PREVIEW_DATABASE_SECRET_ARN=<target-preview-secret-arn> \
+pnpm migration:render-aws-parameters
+```
+
+脚本校验当前 AWS 身份必须属于目标账号，只读取 Stack Outputs，不读取 Secret value，
+并以 `0600` 权限生成被 Git 忽略的 `go-foundation.local.json`、
+`go-iam.local.json` 和 `migration-target.local.json`。
 
 ## 参数契约
 
@@ -50,7 +103,8 @@
 
 preview Secret 使用名称 `github-account-info/preview/database-url`。它不能复用 production URL，应连接同一 RDS 实例里的独立 `github_account_info_preview` database。这样不增加第二个 RDS 实例费用，同时 production 表不会出现在 preview database 中；每个 PR 再在其中使用独立 `pr_<number>` schema。
 
-`server-deployer-policy.yaml` 只引用现有 OIDC Role 名称和 SAM 模板中已经固定的资源名称：
+`server-deployer-policy.yaml` 只引用由 `aws-account-foundation.yaml` 创建或已存在
+的 OIDC Role 名称，以及 SAM 模板中已经固定的资源名称：
 
 | 参数 | 内容 | 要求 |
 | --- | --- | --- |

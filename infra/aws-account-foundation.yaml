@@ -1,0 +1,117 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Account-level GitHub Actions deployment identity for github-account-info.
+  Creates or reuses the GitHub OIDC provider and creates the master-only
+  deployment role required by the repository workflows.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Trusted GitHub source
+        Parameters:
+          - GitHubRepository
+          - DeploymentBranch
+      - Label:
+          default: AWS deployment identity
+        Parameters:
+          - DeploymentRoleName
+          - ExistingGitHubOidcProviderArn
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    Default: StarCoderLn/github-account-info
+    AllowedPattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    Description: Exact GitHub owner/repository allowed to assume the role.
+  DeploymentBranch:
+    Type: String
+    Default: master
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[A-Za-z0-9._/-]+$"
+    Description: Exact protected branch allowed to assume the role.
+  DeploymentRoleName:
+    Type: String
+    Default: github-actions-deployer
+    AllowedPattern: "^[A-Za-z0-9+=,.@_-]{1,64}$"
+    Description: Role assumed by the repository GitHub Actions workflows.
+  ExistingGitHubOidcProviderArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:[A-Za-z0-9-]+:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$"
+    Description: >-
+      Leave empty to create the GitHub provider. Set the provider ARN when the
+      target account already has token.actions.githubusercontent.com.
+
+Conditions:
+  CreateGitHubOidcProvider: !Equals [!Ref ExistingGitHubOidcProviderArn, ""]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateGitHubOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      Tags:
+        - Key: Project
+          Value: github-account-info
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  GitHubActionsDeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref DeploymentRoleName
+      Description: >-
+        GitHub OIDC deployment role for the protected github-account-info
+        branch. Project-scoped supplemental policies are attached by their own
+        reviewed CloudFormation stacks.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TrustExactRepositoryBranch
+            Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateGitHubOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Ref ExistingGitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": sts.amazonaws.com
+                "token.actions.githubusercontent.com:sub": !Sub >-
+                  repo:${GitHubRepository}:ref:refs/heads/${DeploymentBranch}
+      ManagedPolicyArns:
+        # These policies reproduce the current account's baseline deployment
+        # role. Project-specific permissions are added by the existing
+        # server/performance/AI Ops managed-policy stacks.
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSCloudFormationFullAccess
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/IAMFullAccess
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSLambda_FullAccess
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonAPIGatewayAdministrator
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonS3FullAccess
+      Tags:
+        - Key: Project
+          Value: github-account-info
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  GitHubOidcProviderArn:
+    Description: GitHub Actions OIDC provider created or reused by this stack.
+    Value: !If
+      - CreateGitHubOidcProvider
+      - !Ref GitHubOidcProvider
+      - !Ref ExistingGitHubOidcProviderArn
+  DeploymentRoleName:
+    Description: Role name consumed by supplemental deployment-policy stacks.
+    Value: !Ref GitHubActionsDeploymentRole
+  DeploymentRoleArn:
+    Description: Set this value as the GitHub repository variable AWS_DEPLOY_ROLE_ARN.
+    Value: !GetAtt GitHubActionsDeploymentRole.Arn
+

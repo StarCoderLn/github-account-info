@@ -1,0 +1,19 @@
+[
+  {
+    "ParameterKey": "GitHubRepository",
+    "ParameterValue": "StarCoderLn/github-account-info"
+  },
+  {
+    "ParameterKey": "DeploymentBranch",
+    "ParameterValue": "master"
+  },
+  {
+    "ParameterKey": "DeploymentRoleName",
+    "ParameterValue": "github-actions-deployer"
+  },
+  {
+    "ParameterKey": "ExistingGitHubOidcProviderArn",
+    "ParameterValue": ""
+  }
+]
+

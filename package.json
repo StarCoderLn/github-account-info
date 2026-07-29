@@ -12,7 +12,7 @@
 		"build": "turbo run build",
 		"check-types": "turbo run check-types",
 		"test": "turbo run test",
-		"check:infra": "node infra/scripts/validate-http-api-routes.mjs && node infra/scripts/validate-codebuild-production.mjs && node infra/scripts/validate-preview-boundary.mjs && node infra/scripts/validate-monitoring.mjs && node infra/scripts/validate-management-boundary.mjs && node infra/scripts/validate-server-deployer-policy.mjs && node infra/scripts/validate-ai-ops-boundary.mjs && node infra/scripts/validate-ai-ops-deployer-policy.mjs && node infra/scripts/validate-ai-ops-workflow.mjs && node infra/scripts/validate-performance-boundary.mjs && node infra/scripts/validate-performance-workflow.mjs",
+		"check:infra": "node infra/scripts/validate-aws-account-foundation.mjs && node infra/scripts/validate-aws-network-database.mjs && node infra/scripts/validate-http-api-routes.mjs && node infra/scripts/validate-codebuild-production.mjs && node infra/scripts/validate-preview-boundary.mjs && node infra/scripts/validate-monitoring.mjs && node infra/scripts/validate-management-boundary.mjs && node infra/scripts/validate-server-deployer-policy.mjs && node infra/scripts/validate-ai-ops-boundary.mjs && node infra/scripts/validate-ai-ops-deployer-policy.mjs && node infra/scripts/validate-ai-ops-workflow.mjs && node infra/scripts/validate-performance-boundary.mjs && node infra/scripts/validate-performance-workflow.mjs",
 		"dev:web": "turbo run dev --filter=web",
 		"dev:server": "turbo run dev --filter=server",
 		"dev:go": "turbo run dev --filter=go-api",
@@ -20,8 +20,9 @@
 		"db:studio": "turbo run db:studio --filter=@github-account-info/db",
 		"db:generate": "turbo run db:generate --filter=@github-account-info/db",
 		"db:migrate": "turbo run db:migrate --filter=@github-account-info/db",
+		"migration:render-aws-parameters": "node infra/scripts/render-account-migration-parameters.mjs",
 		"check": "biome check --write .",
-		"db:tunnel": "aws ssm start-session --target i-0fe5bdd02a913b64a --region us-east-2 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters '{\"host\":[\"github-account-info-db.c5euaaqk2x7x.us-east-2.rds.amazonaws.com\"],\"portNumber\":[\"5432\"],\"localPortNumber\":[\"5433\"]}'"
+		"db:tunnel": "node infra/scripts/start-db-tunnel.mjs"
 	},
 	"dependencies": {
 		"@github-account-info/env": "workspace:*",

@@ -50,7 +50,7 @@ github-account-info/
 │   ├── ui/          # 共享 shadcn/ui 组件
 │   ├── env/         # 环境变量校验
 │   └── config/      # 共享 TypeScript / Biome 配置
-├── infra/           # ECR/ECS/ALB/Cloud Map/CodeBuild 与 PR 环境 IaC
+├── infra/           # AWS 账号身份、运行资源 IaC 与跨账号迁移手册
 ├── specs/           # 开发规格文档
 └── docs/            # 需求文档
 ```
@@ -154,3 +154,15 @@ pnpm dev:go      # Go API http://localhost:8080
 | `pnpm db:migrate` | 应用 migration 到数据库 |
 | `pnpm db:push` | 直接推送 schema（仅本地快速迭代） |
 | `pnpm db:studio` | 打开 Drizzle Studio 可视化调试 |
+| `pnpm migration:render-aws-parameters` | 从目标账号 Stack Outputs 生成迁移参数 |
+
+## AWS 账号迁移
+
+账号级 GitHub OIDC/部署 Role 由
+[`infra/aws-account-foundation.yaml`](./infra/aws-account-foundation.yaml) 管理。
+完整的源账号备份、目标账号部署顺序、Cloudflare 切流、回滚与旧账号清理门禁见
+[`infra/AWS_ACCOUNT_MIGRATION.md`](./infra/AWS_ACCOUNT_MIGRATION.md)。迁移执行者和
+AI 必须先读取该文档。新账号的网络、加密 RDS 与可选 SSM 堡垒机由
+[`infra/aws-network-database.yaml`](./infra/aws-network-database.yaml) 管理，
+下游参数通过 `infra/scripts/render-account-migration-parameters.mjs` 从 Stack
+Outputs 生成。

@@ -6,10 +6,18 @@ set -euo pipefail
 
 readonly FUNCTION_NAME="github-account-info-api"
 readonly ALIAS_NAME="live"
-readonly API_BASE_URL="${PUBLIC_API_BASE_URL:-https://mdgq1tigyl.execute-api.us-east-2.amazonaws.com}"
-readonly CORS_ORIGIN="${CORS_ORIGIN:-https://github-account-info.pages.dev}"
+readonly API_BASE_URL="${PUBLIC_API_BASE_URL:-}"
+readonly CORS_ORIGIN="${CORS_ORIGIN:-}"
 
-required_variables=(AWS_DEFAULT_REGION DATABASE_URL PROFILE_EVENTS_TOPIC_ARN)
+required_variables=(
+  AWS_DEFAULT_REGION
+  DATABASE_URL
+  PROFILE_EVENTS_TOPIC_ARN
+  PUBLIC_API_BASE_URL
+  CORS_ORIGIN
+  LAMBDA_SUBNET_IDS
+  LAMBDA_SECURITY_GROUP_IDS
+)
 for variable_name in "${required_variables[@]}"; do
   if [[ -z "${!variable_name:-}" ]]; then
     echo "required environment variable is missing: ${variable_name}" >&2
@@ -118,20 +126,26 @@ if [[ ! "$stable_version" =~ ^[0-9]+$ ]]; then
 fi
 
 # CloudFormation 更新 $LATEST 和 SNS 权限；API integration 仍通过 live alias
-# 指向 stable_version，因此模板更新期间不会提前暴露新代码。
+# 指向 stable_version，因此模板更新期间不会提前暴露新代码。Lambda VPC 物理 ID
+# 必须来自当前目标账号的 repository variables，禁止回退到其他账号的默认值。
+parameter_overrides=(
+  "DatabaseUrl=$DATABASE_URL"
+  "CorsOrigin=$CORS_ORIGIN"
+  "ProfileEventsTopicArn=$PROFILE_EVENTS_TOPIC_ARN"
+  "AiOpsIncidentTableName=$ai_ops_incident_table"
+  "AiOpsIncidentTableArn=$ai_ops_incident_table_arn"
+  "AiOpsQueueUrl=$ai_ops_queue_url"
+  "AiOpsQueueArn=$ai_ops_queue_arn"
+  "PerformanceQueueUrl=$performance_queue_url"
+  "PerformanceQueueArn=$performance_queue_arn"
+  "LambdaSubnetIds=$LAMBDA_SUBNET_IDS"
+  "LambdaSecurityGroupIds=$LAMBDA_SECURITY_GROUP_IDS"
+)
+
 sam deploy \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset \
-  --parameter-overrides \
-    DatabaseUrl="$DATABASE_URL" \
-    CorsOrigin="$CORS_ORIGIN" \
-    ProfileEventsTopicArn="$PROFILE_EVENTS_TOPIC_ARN" \
-    AiOpsIncidentTableName="$ai_ops_incident_table" \
-    AiOpsIncidentTableArn="$ai_ops_incident_table_arn" \
-    AiOpsQueueUrl="$ai_ops_queue_url" \
-    AiOpsQueueArn="$ai_ops_queue_arn" \
-    PerformanceQueueUrl="$performance_queue_url" \
-    PerformanceQueueArn="$performance_queue_arn"
+  --parameter-overrides "${parameter_overrides[@]}"
 
 aws lambda wait function-updated-v2 \
   --region "$AWS_DEFAULT_REGION" \
