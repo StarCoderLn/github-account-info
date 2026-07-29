@@ -180,6 +180,9 @@ API Gateway 的 Node integrations 和 `AWS::Lambda::Permission` 全部指向 `${
 6. 五分钟全部通过后，把 `live` 100% 指向 candidate 并清空 `AdditionalVersionWeights`。
 7. 任一窗口失败，立即清空权重并把 `live` 恢复到稳定版本。
 
+若 SAM 明确返回 Stack 已是最新状态，脚本不会强制创建不存在的 candidate；它会保留
+当前 `live` alias，验证 `/`、`/healthz`、`/readyz` 后把本次空部署记为成功。
+
 该账号暂时无法使用 CodeDeploy，因此这里直接使用 Lambda alias 原生权重；灰度行为仍完全由版本和 alias 控制。
 
 > **为什么 CodeDeploy 不可用**
