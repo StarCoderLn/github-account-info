@@ -105,6 +105,7 @@ Resources:
               - application-autoscaling:DescribeScalableTargets
               - application-autoscaling:DescribeScalingActivities
               - application-autoscaling:DescribeScalingPolicies
+              - application-autoscaling:DescribeScheduledActions
             Resource: "*"
           - Sid: CreateOnlyEcsAutoScalingServiceLinkedRole
             Effect: Allow

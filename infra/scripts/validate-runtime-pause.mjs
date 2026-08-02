@@ -5,6 +5,7 @@ const read = (relativePath) =>
 
 const workflow = read("../../.github/workflows/pause-once.yml");
 const policy = read("../operations-pause-policy.yaml");
+const performancePolicy = read("../performance-deployer-policy.yaml");
 const production = read("../go-production.yaml");
 
 const services = [
@@ -27,16 +28,28 @@ for (const service of services) {
 for (const required of [
 	"create-policy-change-set",
 	"execute-policy-change-set",
+	"recover-performance-rollback",
 	"create-runtime-change-sets",
 	"execute-runtime-pause",
 	"vars.AWS_DEPLOY_ROLE_ARN",
 	"refs/heads/master",
 	"aws rds stop-db-instance",
 	"aws ec2 stop-instances",
+	"aws cloudformation continue-update-rollback",
 ]) {
 	if (!workflow.includes(required)) {
 		throw new Error(`Runtime pause workflow is missing: ${required}`);
 	}
+}
+
+if (
+	!performancePolicy.includes(
+		"application-autoscaling:DescribeScheduledActions",
+	)
+) {
+	throw new Error(
+		"Performance deployment policy must observe scheduled scaling actions",
+	);
 }
 
 if (!production.includes("MinValue: 0")) {
