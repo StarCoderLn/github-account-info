@@ -10,6 +10,7 @@ on:
         options:
           - create-policy-change-set
           - execute-policy-change-set
+          - recover-performance-rollback
           - create-runtime-change-sets
           - execute-runtime-pause
       source_run_id:
@@ -183,6 +184,43 @@ jobs:
 
           echo "Runtime Change Set run ID: $GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
           echo "Review production, performance, and all preview Change Sets before execution." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Recover Performance Stack rollback
+        if: inputs.operation == 'recover-performance-rollback'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stack_name="github-account-info-performance"
+          stack_status="$(aws cloudformation describe-stacks \
+            --stack-name "$stack_name" \
+            --query 'Stacks[0].StackStatus' \
+            --output text)"
+
+          if [[ "$stack_status" == "UPDATE_ROLLBACK_FAILED" ]]; then
+            aws cloudformation continue-update-rollback --stack-name "$stack_name"
+          elif [[ "$stack_status" == "UPDATE_ROLLBACK_COMPLETE" ]]; then
+            echo "Performance Stack rollback is already complete."
+            exit 0
+          else
+            echo "Performance Stack is not recoverable from its current state: $stack_status" >&2
+            exit 1
+          fi
+
+          for attempt in {1..40}; do
+            stack_status="$(aws cloudformation describe-stacks \
+              --stack-name "$stack_name" \
+              --query 'Stacks[0].StackStatus' \
+              --output text)"
+            if [[ "$stack_status" == "UPDATE_ROLLBACK_COMPLETE" ]]; then
+              echo "Performance Stack rollback recovered successfully."
+              exit 0
+            fi
+            echo "Waiting for Performance Stack rollback: $stack_status"
+            sleep 15
+          done
+
+          echo "Performance Stack rollback recovery timed out; current state: $stack_status" >&2
+          exit 1
 
       - name: Execute reviewed runtime pause
         if: inputs.operation == 'execute-runtime-pause'
