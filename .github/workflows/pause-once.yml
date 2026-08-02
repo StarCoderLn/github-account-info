@@ -147,9 +147,29 @@ jobs:
               "${template_arguments[@]}" \
               --parameters "file://${output_file}" \
               --capabilities CAPABILITY_NAMED_IAM
-            aws cloudformation wait change-set-create-complete \
+            if ! aws cloudformation wait change-set-create-complete \
               --stack-name "$stack_name" \
-              --change-set-name "$change_set_name"
+              --change-set-name "$change_set_name"; then
+              change_set_status="$(aws cloudformation describe-change-set \
+                --stack-name "$stack_name" \
+                --change-set-name "$change_set_name" \
+                --query Status \
+                --output text)"
+              change_set_reason="$(aws cloudformation describe-change-set \
+                --stack-name "$stack_name" \
+                --change-set-name "$change_set_name" \
+                --query StatusReason \
+                --output text)"
+              if [[ "$change_set_status" == "FAILED" && "$change_set_reason" == *"didn't contain changes"* ]]; then
+                echo "$stack_name is already paused; no Change Set is required."
+                aws cloudformation delete-change-set \
+                  --stack-name "$stack_name" \
+                  --change-set-name "$change_set_name"
+                return 0
+              fi
+              echo "Change Set failed: $change_set_reason" >&2
+              return 1
+            fi
             aws cloudformation describe-change-set \
               --stack-name "$stack_name" \
               --change-set-name "$change_set_name" \
@@ -237,6 +257,20 @@ jobs:
           execute_update() {
             local stack_name="$1"
             local change_set_name="$2"
+            if ! aws cloudformation describe-change-set \
+              --stack-name "$stack_name" \
+              --change-set-name "$change_set_name" >/dev/null 2>&1; then
+              nonzero_desired_count="$(aws cloudformation describe-stacks \
+                --stack-name "$stack_name" \
+                --query 'Stacks[0].Parameters[?contains(ParameterKey, `DesiredCount`) && ParameterValue != `0`].ParameterKey' \
+                --output text)"
+              if [[ -z "$nonzero_desired_count" ]]; then
+                echo "$stack_name is already paused; skipping execution."
+                return 0
+              fi
+              echo "Missing Change Set for an active Stack: $stack_name" >&2
+              return 1
+            fi
             aws cloudformation describe-change-set \
               --stack-name "$stack_name" \
               --change-set-name "$change_set_name" \
