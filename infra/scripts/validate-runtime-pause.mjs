@@ -38,6 +38,7 @@ for (const required of [
 	"aws cloudformation continue-update-rollback",
 	"is already paused; no Change Set is required",
 	"is already paused; skipping execution",
+	'nonzero_desired_count" == "None"',
 ]) {
 	if (!workflow.includes(required)) {
 		throw new Error(`Runtime pause workflow is missing: ${required}`);
