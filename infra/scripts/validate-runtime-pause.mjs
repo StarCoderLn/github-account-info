@@ -36,6 +36,8 @@ for (const required of [
 	"aws rds stop-db-instance",
 	"aws ec2 stop-instances",
 	"aws cloudformation continue-update-rollback",
+	"is already paused; no Change Set is required",
+	"is already paused; skipping execution",
 ]) {
 	if (!workflow.includes(required)) {
 		throw new Error(`Runtime pause workflow is missing: ${required}`);
