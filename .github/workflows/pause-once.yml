@@ -262,9 +262,10 @@ jobs:
               --change-set-name "$change_set_name" >/dev/null 2>&1; then
               nonzero_desired_count="$(aws cloudformation describe-stacks \
                 --stack-name "$stack_name" \
-                --query 'Stacks[0].Parameters[?contains(ParameterKey, `DesiredCount`) && ParameterValue != `0`].ParameterKey' \
-                --output text)"
-              if [[ -z "$nonzero_desired_count" || "$nonzero_desired_count" == "None" ]]; then
+                --query 'Stacks[0].Parameters' \
+                --output json | jq -r \
+                  '.[] | select(.ParameterKey | contains("DesiredCount")) | select(.ParameterValue != "0") | .ParameterKey')"
+              if [[ -z "$nonzero_desired_count" ]]; then
                 echo "$stack_name is already paused; skipping execution."
                 return 0
               fi
